@@ -368,7 +368,7 @@ app.layout = dbc.Container([
             dbc.Col(dbc.Card([dbc.CardBody([html.Div("Avg Revenue/Rental", className='kpi-label'), html.Div(id='kpi_avg_rev', className='kpi-value')])], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=2, className='dashboard-kpi-col'),
             dbc.Col(dbc.Card([dbc.CardBody([html.Div("Avg Rental Days", className='kpi-label'), html.Div(id='kpi_avg_days', className='kpi-value')])], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=2, className='dashboard-kpi-col'),
             dbc.Col(dbc.Card([dbc.CardBody([html.Div("Avg KMs Traveled", className='kpi-label'), html.Div(id='kpi_avg_kms', className='kpi-value')])], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=2, className='dashboard-kpi-col'),
-        ], className='g-3 dashboard-kpi-row'),
+        ], className='g-3 dashboard-kpi-row overview-kpi-row'),
         dbc.Row([
             dbc.Col(dcc.Graph(id='trend_revenue', className='dashboard-graph', config={'responsive': True, 'displayModeBar': False}), xs=12, xl=4, className='dashboard-graph-col'),
             dbc.Col(dcc.Graph(id='trend_rentals', className='dashboard-graph', config={'responsive': True, 'displayModeBar': False}), xs=12, xl=4, className='dashboard-graph-col'),
@@ -616,7 +616,7 @@ app.layout = dbc.Container([
                 html.Div("Returning Drivers", className='kpi-label'),
                 html.Div(id='driver_kpi_returning', className='kpi-value')
             ])], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=3, className='dashboard-kpi-col'),
-        ], className='g-3 dashboard-kpi-row'),
+        ], className='g-3 dashboard-kpi-row driver-kpi-row'),
 
         dbc.Alert(id='driver_insight_summary', color='light', className='mt-2 mb-3', style={'border': '1px solid #e5e7eb'}),
 
@@ -2393,8 +2393,18 @@ def update_all(stations, vehicle_types, plates, renters, years, months, start_da
                 if mom_candidates:
                     critical_metric_key = sorted(mom_candidates, key=lambda x: x[1], reverse=True)[0][0]
 
+                metric_card_map = {metric_key: card for metric_key, card in metric_cards}
+                metric_order = [metric_key for metric_key, _, _ in metric_specs]
+                sorted_by_change = [k for k, _ in sorted(mom_candidates, key=lambda x: x[1], reverse=True)]
+                ordered_metric_keys = sorted_by_change + [k for k in metric_order if k not in sorted_by_change]
+
+                critical_title = 'Most Critical Change'
+                if critical_metric_key:
+                    critical_title = f"Most Critical Change: {metric_results[critical_metric_key]['label']}"
+
                 styled_cards = []
-                for metric_key, card in metric_cards:
+                for metric_key in ordered_metric_keys:
+                    card = metric_card_map[metric_key]
                     is_critical = metric_key == critical_metric_key
                     card_node = card
                     if is_critical:
@@ -2404,17 +2414,6 @@ def update_all(stations, vehicle_types, plates, renters, years, months, start_da
                         )
                     styled_cards.append(
                         dbc.Col([
-                            html.Div(
-                                'Most Critical Change',
-                                style={
-                                    'fontSize': '0.75rem',
-                                    'fontWeight': '700',
-                                    'color': '#00708D',
-                                    'marginBottom': '6px',
-                                    'minHeight': '18px',
-                                    'visibility': 'visible' if is_critical else 'hidden'
-                                }
-                            ),
                             card_node
                         ], xs=12, xl=4, className='dashboard-kpi-col monthly-kpi-col')
                     )
@@ -2482,8 +2481,9 @@ def update_all(stations, vehicle_types, plates, renters, years, months, start_da
                     html.Div('Monthly Performance Story', className='section-subtitle'),
                     html.Div(context_header, style={'fontSize': '0.95rem', 'color': '#4b5563', 'marginBottom': '10px'}),
                     html.Div(selected_month_message or '', style={'color': '#0b66a0', 'marginBottom': '8px', 'display': 'block' if selected_month_message else 'none'}),
+                    html.Div(critical_title, className='critical-change-title'),
 
-                    dbc.Row(styled_cards, className='g-3 dashboard-kpi-row', style={'marginBottom': '14px'}),
+                    dbc.Row(styled_cards, className='g-3 dashboard-kpi-row monthly-kpi-row', style={'marginBottom': '14px'}),
 
                     dbc.Row([
                         dbc.Col(dcc.Graph(figure=rentals_trend_fig, className='dashboard-graph', config={'displayModeBar': False, 'responsive': True}), xs=12, xl=4, className='dashboard-graph-col'),
@@ -2540,7 +2540,7 @@ def update_all(stations, vehicle_types, plates, renters, years, months, start_da
         dealer_revenue_fig = go.Figure()
         dealer_days_fig = go.Figure()
 
-    return (f"${total_rev:,.2f}", f"{total_rentals:.2f}", f"{total_days:.2f}", f"${avg_rev:.2f}", f"{avg_days:.2f}", f"{avg_kms:.2f}",
+    return (f"${total_rev:,.0f}", f"{total_rentals:,.0f}", f"{total_days:,.0f}", f"${avg_rev:.2f}", f"{avg_days:,.0f}", f"{avg_kms:,.0f}",
             trend_rev, trend_rentals, trend_days,
             projected_month_end_revenue, projected_month_end_rentals, projected_month_end_days,
             cum_revenue_summary, cum_rentals_summary, cum_days_summary,

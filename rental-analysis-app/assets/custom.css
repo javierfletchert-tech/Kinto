@@ -212,6 +212,33 @@ svg { background: transparent !important; }
     min-height: 2.6rem;
 }
 
+.overview-kpi-row .dashboard-kpi-card .card-body,
+.overview-kpi-row .dashboard-kpi-card .dbc-card-body,
+.driver-kpi-row .dashboard-kpi-card .card-body,
+.driver-kpi-row .dashboard-kpi-card .dbc-card-body {
+    text-align: center;
+    align-items: center;
+}
+
+.overview-kpi-row .dashboard-kpi-card .kpi-label,
+.driver-kpi-row .dashboard-kpi-card .kpi-label {
+    text-align: center;
+}
+
+.overview-kpi-row .dashboard-kpi-card .kpi-value,
+.driver-kpi-row .dashboard-kpi-card .kpi-value {
+    text-align: center;
+    width: 100%;
+}
+
+.critical-change-title {
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: #00708D;
+    margin: 2px 0 10px;
+    letter-spacing: 0.02em;
+}
+
 .dcc-dropdown {
     min-height: 45px;
 }
