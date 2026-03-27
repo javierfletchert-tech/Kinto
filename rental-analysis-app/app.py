@@ -2050,7 +2050,7 @@ def update_all(stations, vehicle_types, plates, renters, years, months, start_da
             q1, q2 = segment_df['revenue'].quantile([0.33, 0.66]).tolist()
             conditions = [segment_df['revenue'] <= q1, (segment_df['revenue'] > q1) & (segment_df['revenue'] <= q2), segment_df['revenue'] > q2]
             labels = ['Low activity', 'Medium', 'High value']
-            segment_df['segment'] = pd.Series(pd.Categorical(pd.NA, categories=labels))
+            segment_df['segment'] = labels[0]
             segment_df.loc[conditions[0], 'segment'] = labels[0]
             segment_df.loc[conditions[1], 'segment'] = labels[1]
             segment_df.loc[conditions[2], 'segment'] = labels[2]
