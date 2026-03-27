@@ -1,0 +1,153 @@
+/* Kinto Color Palette */
+:root {
+    --kinto-blue: #00708D;
+    --kinto-dark: #2C353B;
+    --kinto-white: #FFFFFF;
+    --kinto-black: #000000;
+    --kinto-grey: #f6f8fa;
+    --kinto-muted: #6e7680;
+}
+
+body {
+    background: linear-gradient(135deg, #FFFFFF 0%, #00708D 100%);
+    font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    color: var(--kinto-dark);
+}
+
+.dash-spacer {
+    margin-top: 16px;
+}
+
+.card, .dbc-card {
+    background-color: rgba(255, 255, 255, 0.95) !important;
+    border: none;
+    border-radius: 14px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06);
+}
+
+.card-body, .dbc-card-body {
+    padding: 18px !important;
+}
+
+.kpi-card {
+    background-color: rgba(255, 255, 255, 1) !important;
+    border: 0 !important;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.05);
+    border-radius: 14px;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+}
+
+.kpi-label { color: #7a8a98; font-size: 0.85rem; font-weight: 600; letter-spacing: 0.04em; }
+.kpi-value { color: #1f2d3d; font-size: 2.3rem; font-weight: 800; }
+.kpi-subtext { color: #7a8a98; font-size: 0.88rem; }
+
+.dcc-graph .main-svg, .js-plotly-plot .plotly, .plotly { background: rgba(255,255,255,0) !important; }
+
+svg { background: transparent !important; }
+
+.plotly .axis line, .plotly .axis path { stroke: #e5e5e5 !important; }
+
+/* Logo Reset Button Styling */
+#logo-reset-button {
+    transition: all 0.2s ease;
+    border-radius: 4px;
+}
+
+#logo-reset-button:hover {
+    background-color: rgba(0, 112, 141, 0.1) !important;
+    transform: scale(1.05);
+}
+
+#logo-reset-button:active {
+    background-color: rgba(0, 112, 141, 0.2) !important;
+    transform: scale(0.98);
+}
+
+.plotly .gridlines { stroke: #eff2f5 !important; }
+
+.dcc-graph .modebar-btn { background: rgba(255,255,255,0.8) !important; }
+
+.kpi-label {
+    color: var(--kinto-muted);
+    font-size: 0.95rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 6px;
+}
+
+.kpi-value {
+    font-size: 2.2rem;
+    font-weight: 700;
+    color: var(--kinto-dark);
+}
+
+.kpi-subtext {
+    color: var(--kinto-muted);
+    font-size: 0.9rem;
+}
+
+.dash-table-container .dash-table {
+    border: 1px solid #e1e7ee;
+    border-radius: 12px;
+}
+
+.dash-table-container .dash-table-container .dash-spreadsheet-inner tr:nth-child(even) {
+    background-color: #fcfdff;
+}
+
+.dash-table-container .dash-spreadsheet-header {
+    background-color: var(--kinto-blue) !important;
+    color: #ffffff;
+    font-size: 0.92rem;
+}
+
+.dash-table-container .dash-spreadsheet-inner td {
+    padding: 10px 8px;
+}
+
+.dcc-dropdown {
+    min-height: 45px;
+}
+
+.tab-style {
+    background: rgba(255, 255, 255, 0.75);
+    border: 1px solid #d9dee3;
+    border-radius: 10px;
+    box-shadow: 0 4px 14px rgba(44, 53, 59, 0.06);
+}
+
+.tab-style .tab {
+    font-size: 1rem;
+    color: #2c353b;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.tab-style .tab--selected {
+    background: var(--kinto-blue);
+    color: #fff;
+    border-radius: 8px;
+}
+
+.dcc-graph .main-svg {
+    background: transparent !important;
+}
+
+.btn-primary {
+    background-color: var(--kinto-blue);
+    border-color: var(--kinto-blue);
+}
+
+.btn-secondary {
+    background-color: var(--kinto-dark);
+    border-color: var(--kinto-dark);
+}
+
+.navbar, .bg-primary {
+    background-color: var(--kinto-blue) !important;
+}
+
+.text-primary {
+    color: var(--kinto-blue) !important;
+}
