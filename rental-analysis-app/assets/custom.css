@@ -14,6 +14,16 @@ body {
     color: var(--kinto-dark);
 }
 
+.section-title {
+    margin: 0 0 1rem;
+    line-height: 1.2;
+}
+
+.section-subtitle {
+    margin: 0 0 0.9rem;
+    line-height: 1.3;
+}
+
 .dash-spacer {
     margin-top: 16px;
 }
@@ -34,8 +44,31 @@ body {
     border: 0 !important;
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.05);
     border-radius: 14px;
-    padding: 14px 16px;
     margin-bottom: 10px;
+}
+
+.dashboard-kpi-row {
+    align-items: stretch;
+}
+
+.dashboard-kpi-col {
+    display: flex;
+}
+
+.dashboard-kpi-card {
+    width: 100%;
+    height: 100%;
+    min-height: 136px;
+}
+
+.dashboard-kpi-card .card-body,
+.dashboard-kpi-card .dbc-card-body {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 0.55rem;
+    min-height: 136px;
+    padding: 16px 18px !important;
 }
 
 .kpi-label { color: #7a8a98; font-size: 0.85rem; font-weight: 600; letter-spacing: 0.04em; }
@@ -70,16 +103,24 @@ svg { background: transparent !important; }
 
 .kpi-label {
     color: var(--kinto-muted);
-    font-size: 0.95rem;
+    font-size: clamp(0.78rem, 0.73rem + 0.2vw, 0.92rem);
     text-transform: uppercase;
     letter-spacing: 0.05em;
     margin-bottom: 6px;
+    line-height: 1.25;
+    min-height: 2.55em;
+    max-width: 100%;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .kpi-value {
-    font-size: 2.2rem;
+    font-size: clamp(1.5rem, 1.1rem + 1.05vw, 2.2rem);
     font-weight: 700;
     color: var(--kinto-dark);
+    line-height: 1.05;
+    overflow-wrap: anywhere;
 }
 
 .kpi-subtext {
@@ -104,6 +145,71 @@ svg { background: transparent !important; }
 
 .dash-table-container .dash-spreadsheet-inner td {
     padding: 10px 8px;
+}
+
+.dashboard-chart-row {
+    align-items: stretch;
+}
+
+.dashboard-graph-col {
+    display: flex;
+    flex-direction: column;
+}
+
+.dashboard-graph {
+    width: 100%;
+    min-height: 380px;
+}
+
+.dashboard-graph-tall {
+    min-height: 420px;
+}
+
+.js-plotly-plot,
+.js-plotly-plot .plot-container,
+.js-plotly-plot .svg-container {
+    width: 100% !important;
+}
+
+.cum-summary-text {
+    font-size: 0.84rem;
+    color: #4b5563;
+    margin: 0 0 0.65rem;
+    font-weight: 600;
+    min-height: 1.4rem;
+}
+
+.monthly-comparison-container {
+    margin-top: 1rem;
+}
+
+.monthly-story-card {
+    background-color: #ffffff;
+    border: 1px solid #e5e7eb;
+    box-shadow: 0 4px 16px rgba(17, 24, 39, 0.08);
+    border-radius: 12px;
+    padding: 18px;
+}
+
+.monthly-kpi-col {
+    margin-bottom: 0;
+}
+
+.monthly-kpi-card {
+    min-height: 250px;
+}
+
+.monthly-kpi-card-body {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 0.1rem;
+    height: 100%;
+    padding: 16px 18px !important;
+}
+
+.monthly-kpi-card .kpi-value {
+    min-height: 2.6rem;
 }
 
 .dcc-dropdown {
@@ -150,4 +256,29 @@ svg { background: transparent !important; }
 
 .text-primary {
     color: var(--kinto-blue) !important;
+}
+
+@media (max-width: 1199.98px) {
+    .dashboard-kpi-card,
+    .monthly-kpi-card {
+        min-height: 150px;
+    }
+}
+
+@media (max-width: 767.98px) {
+    .monthly-story-card {
+        padding: 14px;
+    }
+
+    .dashboard-graph {
+        min-height: 340px;
+    }
+
+    .dashboard-graph-tall {
+        min-height: 380px;
+    }
+
+    .kpi-label {
+        min-height: auto;
+    }
 }

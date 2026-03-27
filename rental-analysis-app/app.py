@@ -360,56 +360,56 @@ app.layout = dbc.Container([
     html.Div(id='overview-content', children=[
         # Executive Overview
         html.Hr(),
-        html.H3("Executive Overview"),
+        html.H3("Executive Overview", className='section-title'),
         dbc.Row([
-            dbc.Col(dbc.Card([dbc.CardBody([html.Div("Total Revenue", className='kpi-label'), html.Div(id='kpi_revenue', className='kpi-value')])], className='kpi-card'), width=2),
-            dbc.Col(dbc.Card([dbc.CardBody([html.Div("Total Rentals", className='kpi-label'), html.Div(id='kpi_rentals', className='kpi-value')])], className='kpi-card'), width=2),
-            dbc.Col(dbc.Card([dbc.CardBody([html.Div("Total Rental Days", className='kpi-label'), html.Div(id='kpi_rental_days', className='kpi-value')])], className='kpi-card'), width=2),
-            dbc.Col(dbc.Card([dbc.CardBody([html.Div("Avg Revenue/Rental", className='kpi-label'), html.Div(id='kpi_avg_rev', className='kpi-value')])], className='kpi-card'), width=2),
-            dbc.Col(dbc.Card([dbc.CardBody([html.Div("Avg Rental Days", className='kpi-label'), html.Div(id='kpi_avg_days', className='kpi-value')])], className='kpi-card'), width=2),
-            dbc.Col(dbc.Card([dbc.CardBody([html.Div("Avg KMs Traveled", className='kpi-label'), html.Div(id='kpi_avg_kms', className='kpi-value')])], className='kpi-card'), width=2),
-        ]),
+            dbc.Col(dbc.Card([dbc.CardBody([html.Div("Total Revenue", className='kpi-label'), html.Div(id='kpi_revenue', className='kpi-value')])], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=2, className='dashboard-kpi-col'),
+            dbc.Col(dbc.Card([dbc.CardBody([html.Div("Total Rentals", className='kpi-label'), html.Div(id='kpi_rentals', className='kpi-value')])], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=2, className='dashboard-kpi-col'),
+            dbc.Col(dbc.Card([dbc.CardBody([html.Div("Total Rental Days", className='kpi-label'), html.Div(id='kpi_rental_days', className='kpi-value')])], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=2, className='dashboard-kpi-col'),
+            dbc.Col(dbc.Card([dbc.CardBody([html.Div("Avg Revenue/Rental", className='kpi-label'), html.Div(id='kpi_avg_rev', className='kpi-value')])], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=2, className='dashboard-kpi-col'),
+            dbc.Col(dbc.Card([dbc.CardBody([html.Div("Avg Rental Days", className='kpi-label'), html.Div(id='kpi_avg_days', className='kpi-value')])], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=2, className='dashboard-kpi-col'),
+            dbc.Col(dbc.Card([dbc.CardBody([html.Div("Avg KMs Traveled", className='kpi-label'), html.Div(id='kpi_avg_kms', className='kpi-value')])], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=2, className='dashboard-kpi-col'),
+        ], className='g-3 dashboard-kpi-row'),
         dbc.Row([
-            dbc.Col(dcc.Graph(id='trend_revenue'), width=4),
-            dbc.Col(dcc.Graph(id='trend_rentals'), width=4),
-            dbc.Col(dcc.Graph(id='trend_rental_days'), width=4),
-        ]),
+            dbc.Col(dcc.Graph(id='trend_revenue', className='dashboard-graph', config={'responsive': True, 'displayModeBar': False}), xs=12, xl=4, className='dashboard-graph-col'),
+            dbc.Col(dcc.Graph(id='trend_rentals', className='dashboard-graph', config={'responsive': True, 'displayModeBar': False}), xs=12, xl=4, className='dashboard-graph-col'),
+            dbc.Col(dcc.Graph(id='trend_rental_days', className='dashboard-graph', config={'responsive': True, 'displayModeBar': False}), xs=12, xl=4, className='dashboard-graph-col'),
+        ], className='g-3 dashboard-chart-row'),
         html.Hr(style={'margin': '16px 0 10px 0'}),
-        html.H5("Cumulative Performance (Month-to-Date Comparison)"),
+        html.H5("Cumulative Performance (Month-to-Date Comparison)", className='section-subtitle'),
         dbc.Row([
             dbc.Col(dbc.Card([dbc.CardBody([
                 html.Div("Projected Month-End Revenue", className='kpi-label'),
                 html.Div(id='cum_proj_rev', className='kpi-value')
-            ])], className='kpi-card'), width=12, md=4),
+            ])], className='kpi-card dashboard-kpi-card'), xs=12, xl=4, className='dashboard-kpi-col'),
             dbc.Col(dbc.Card([dbc.CardBody([
                 html.Div("Projected Month-End Rentals", className='kpi-label'),
                 html.Div(id='cum_proj_rentals', className='kpi-value')
-            ])], className='kpi-card'), width=12, md=4),
+            ])], className='kpi-card dashboard-kpi-card'), xs=12, xl=4, className='dashboard-kpi-col'),
             dbc.Col(dbc.Card([dbc.CardBody([
                 html.Div("Projected Month-End Rental Days", className='kpi-label'),
                 html.Div(id='cum_proj_days', className='kpi-value')
-            ])], className='kpi-card'), width=12, md=4),
-        ], className='g-3'),
+            ])], className='kpi-card dashboard-kpi-card'), xs=12, xl=4, className='dashboard-kpi-col'),
+        ], className='g-3 dashboard-kpi-row'),
         dbc.Row([
             dbc.Col([
-                html.Div(id='cum_revenue_summary', style={'fontSize': '0.82rem', 'color': '#4b5563', 'margin': '2px 0 6px 0', 'fontWeight': '600'}),
-                dcc.Graph(id='cum_revenue_chart')
-            ], width=12, md=4),
+                html.Div(id='cum_revenue_summary', className='cum-summary-text'),
+                dcc.Graph(id='cum_revenue_chart', className='dashboard-graph dashboard-graph-tall', config={'responsive': True, 'displayModeBar': False})
+            ], xs=12, xl=4, className='dashboard-graph-col'),
             dbc.Col([
-                html.Div(id='cum_rentals_summary', style={'fontSize': '0.82rem', 'color': '#4b5563', 'margin': '2px 0 6px 0', 'fontWeight': '600'}),
-                dcc.Graph(id='cum_rentals_chart')
-            ], width=12, md=4),
+                html.Div(id='cum_rentals_summary', className='cum-summary-text'),
+                dcc.Graph(id='cum_rentals_chart', className='dashboard-graph dashboard-graph-tall', config={'responsive': True, 'displayModeBar': False})
+            ], xs=12, xl=4, className='dashboard-graph-col'),
             dbc.Col([
-                html.Div(id='cum_days_summary', style={'fontSize': '0.82rem', 'color': '#4b5563', 'margin': '2px 0 6px 0', 'fontWeight': '600'}),
-                dcc.Graph(id='cum_days_chart')
-            ], width=12, md=4),
-        ], className='mt-2'),
+                html.Div(id='cum_days_summary', className='cum-summary-text'),
+                dcc.Graph(id='cum_days_chart', className='dashboard-graph dashboard-graph-tall', config={'responsive': True, 'displayModeBar': False})
+            ], xs=12, xl=4, className='dashboard-graph-col'),
+        ], className='g-3 mt-2 dashboard-chart-row'),
     ], style={'display': 'block'}),
     
     html.Div(id='monthly-content', children=[
         # Monthly Comparison
         html.Hr(),
-        html.H3("Monthly Comparison"),
+        html.H3("Monthly Comparison", className='section-title'),
         dbc.Row([
             dbc.Col([
                 html.Label("Select Month for Comparison"),
@@ -420,7 +420,7 @@ app.layout = dbc.Container([
                 )
             ], width=4),
         ]),
-        html.Div(id='monthly_comparison'),
+        html.Div(id='monthly_comparison', className='monthly-comparison-container'),
     ], style={'display': 'none'}),
     
     html.Div(id='dealer-content', children=[
@@ -972,6 +972,70 @@ def build_complete_monthly_series(filtered_df, value_col):
     return monthly_data.sort_values('year_month_dt')
 
 
+def _monthly_time_axis(point_count):
+    if point_count <= 6:
+        dtick = 'M1'
+        tickangle = 0
+    elif point_count <= 12:
+        dtick = 'M2'
+        tickangle = -20
+    else:
+        dtick = 'M3'
+        tickangle = -25
+
+    return dict(
+        type='date',
+        tickformat='%b %Y',
+        tickmode='linear',
+        dtick=dtick,
+        showgrid=False,
+        title='',
+        tickangle=tickangle,
+        automargin=True,
+        nticks=8,
+    )
+
+
+def _apply_standard_figure_layout(fig, title, *, xaxis=None, yaxis=None, height=360, hovermode='x unified', show_legend=False, legend_y=1.10, bottom_margin=58):
+    layout_kwargs = dict(
+        template='plotly_white',
+        title=dict(text=title, x=0, xanchor='left', y=0.98, yanchor='top', font=dict(size=15, color='#1f2937')),
+        autosize=True,
+        height=height,
+        hovermode=hovermode,
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        margin=dict(t=108 if show_legend else 74, r=20, b=bottom_margin, l=20),
+    )
+
+    if show_legend:
+        layout_kwargs['legend'] = dict(
+            orientation='h',
+            yanchor='bottom',
+            y=legend_y,
+            xanchor='left',
+            x=0,
+            bgcolor='rgba(0,0,0,0)',
+            borderwidth=0,
+            font=dict(size=11, color='#4b5563'),
+            title=dict(text='')
+        )
+
+    fig.update_layout(**layout_kwargs)
+
+    if xaxis:
+        fig.update_xaxes(**xaxis)
+    else:
+        fig.update_xaxes(automargin=True)
+
+    if yaxis:
+        fig.update_yaxes(**yaxis)
+    else:
+        fig.update_yaxes(automargin=True)
+
+    return fig
+
+
 def get_filtered_expense_df(dealers, categories, vehicles, model_years, exp_years, exp_months, exp_start, exp_end, fleet_statuses=None, exp_unit_statuses=None):
     filt = inv_df.copy()
 
@@ -1163,17 +1227,14 @@ def update_all(stations, vehicle_types, plates, renters, years, months, start_da
     trend_rev.update_traces(
         line=dict(width=3, shape='spline'), 
         marker=dict(size=6),
-        text=[f"${v:,.2f}" for v in trend_data_rev['total_to_charge']],
-        textposition="top center",
-        textfont=dict(size=10, color='#00708D'),
         hovertemplate='<b>%{x|%b %Y}</b><br>Revenue: $%{y:,.2f}<extra></extra>'
     )
-    trend_rev.update_layout(
-        template='plotly_white', 
-        yaxis=dict(tickformat='$,.0f', title='Revenue'),
-        xaxis=dict(type='date', tickformat='%b %Y', tickmode='linear', 
-                   dtick='M1', showgrid=False, title='', tickangle=45),
-        hovermode='x unified'
+    _apply_standard_figure_layout(
+        trend_rev,
+        'Revenue Over Time',
+        xaxis=_monthly_time_axis(len(trend_data_rev)),
+        yaxis=dict(tickformat='$,.0f', title='Revenue', automargin=True),
+        height=380,
     )
 
     trend_data_rentals = build_complete_monthly_series(filtered_df, 'rental_id')
@@ -1182,17 +1243,14 @@ def update_all(stations, vehicle_types, plates, renters, years, months, start_da
     trend_rentals.update_traces(
         line=dict(width=3, shape='spline'),
         marker=dict(size=6),
-        text=[f"{int(v)}" for v in trend_data_rentals['rental_id']],
-        textposition="top center",
-        textfont=dict(size=10, color='#2C353B'),
         hovertemplate='<b>%{x|%b %Y}</b><br>Rentals: %{y}<extra></extra>'
     )
-    trend_rentals.update_layout(
-        template='plotly_white',
-        yaxis=dict(tickformat=',.0f', title='Rentals'),
-        xaxis=dict(type='date', tickformat='%b %Y', tickmode='linear',
-                   dtick='M1', showgrid=False, title='', tickangle=45),
-        hovermode='x unified'
+    _apply_standard_figure_layout(
+        trend_rentals,
+        'Rentals Over Time',
+        xaxis=_monthly_time_axis(len(trend_data_rentals)),
+        yaxis=dict(tickformat=',.0f', title='Rentals', automargin=True),
+        height=380,
     )
 
     trend_data_days = build_complete_monthly_series(filtered_df, 'rental_days')
@@ -1201,27 +1259,28 @@ def update_all(stations, vehicle_types, plates, renters, years, months, start_da
     trend_days.update_traces(
         line=dict(width=3, shape='spline'),
         marker=dict(size=6),
-        text=[f"{v:.2f}" for v in trend_data_days['rental_days']],
-        textposition="top center",
-        textfont=dict(size=10, color='#00708D'),
         hovertemplate='<b>%{x|%b %Y}</b><br>Rental Days: %{y:.2f}<extra></extra>'
     )
-    trend_days.update_layout(
-        template='plotly_white',
-        yaxis=dict(tickformat='.2f', title='Days'),
-        xaxis=dict(type='date', tickformat='%b %Y', tickmode='linear',
-                   dtick='M1', showgrid=False, title='', tickangle=45),
-        hovermode='x unified'
+    _apply_standard_figure_layout(
+        trend_days,
+        'Rental Days Over Time',
+        xaxis=_monthly_time_axis(len(trend_data_days)),
+        yaxis=dict(tickformat='.2f', title='Days', automargin=True),
+        height=380,
     )
 
     # Cumulative Performance (Month-to-Date Comparison)
     def _empty_cum_figure(title, y_title):
         fig = go.Figure()
+        _apply_standard_figure_layout(
+            fig,
+            title,
+            xaxis=dict(title='Day of Month', tickmode='array', tickvals=[1, 5, 10, 15, 20, 25, 30], tickangle=0, showgrid=False, automargin=True),
+            yaxis=dict(title=y_title, showgrid=True, gridcolor='rgba(156,163,175,0.20)', zeroline=False, automargin=True),
+            height=420,
+            bottom_margin=64,
+        )
         fig.update_layout(
-            title=title,
-            template='plotly_white',
-            xaxis=dict(title='Day of Month', tickmode='array', tickvals=[1, 5, 10, 15, 20, 25, 30, 31], tickangle=0, showgrid=False),
-            yaxis=dict(title=y_title, showgrid=True, gridcolor='rgba(156,163,175,0.20)', zeroline=False),
             annotations=[dict(text='No data available for selected filters', x=0.5, y=0.5, xref='paper', yref='paper', showarrow=False, font=dict(color='#6b7280'))]
         )
         return fig
@@ -1315,32 +1374,24 @@ def update_all(stations, vehicle_types, plates, renters, years, months, start_da
             annotation_position='top'
         )
 
-        fig.update_layout(
-            title=title,
-            template='plotly_white',
+        _apply_standard_figure_layout(
+            fig,
+            title,
             xaxis=dict(
                 title='Day of Month',
                 tickmode='array',
-                tickvals=[1, 5, 10, 15, 20, 25, 30, 31],
+                tickvals=[1, 5, 10, 15, 20, 25, 30],
                 tickangle=0,
                 showgrid=False,
-                range=[1, 31]
+                range=[1, 31],
+                automargin=True,
             ),
-            yaxis=dict(title=y_title, showgrid=True, gridcolor='rgba(156,163,175,0.20)', zeroline=False),
-            legend=dict(
-                orientation='h',
-                yanchor='bottom',
-                y=1.03,
-                xanchor='left',
-                x=0,
-                bgcolor='rgba(0,0,0,0)',
-                bordercolor='rgba(0,0,0,0)',
-                borderwidth=0,
-                font=dict(size=11, color='#4b5563'),
-                title=dict(text='')
-            ),
+            yaxis=dict(title=y_title, showgrid=True, gridcolor='rgba(156,163,175,0.20)', zeroline=False, automargin=True),
+            height=420,
             hovermode='x',
-            margin=dict(t=75, r=12, b=48, l=12)
+            show_legend=True,
+            legend_y=1.08,
+            bottom_margin=64,
         )
         return fig
 
@@ -1729,12 +1780,12 @@ def update_all(stations, vehicle_types, plates, renters, years, months, start_da
         marker=dict(opacity=0.85),
         hovertemplate='<b>%{x|%b %Y}</b><br>Rentals: %{y}<extra></extra>'
     )
-    rentals_month.update_layout(
-        template='plotly_white',
-        yaxis=dict(tickformat=',.0f', title='Rentals'),
-        xaxis=dict(type='date', tickformat='%b %Y', tickmode='linear',
-                   dtick='M1', showgrid=False, title='', tickangle=45),
-        hovermode='x unified'
+    _apply_standard_figure_layout(
+        rentals_month,
+        'Rentals by Month',
+        xaxis=_monthly_time_axis(len(rentals_month_data)),
+        yaxis=dict(tickformat=',.0f', title='Rentals', automargin=True),
+        height=380,
     )
 
     rentals_dow_data = filtered_df.groupby('start_day_of_week').size().reset_index(name='count').sort_values('count', ascending=False)
@@ -1781,12 +1832,12 @@ def update_all(stations, vehicle_types, plates, renters, years, months, start_da
         marker=dict(opacity=0.85),
         hovertemplate='<b>%{x|%b %Y}</b><br>Days: %{y:.2f}<extra></extra>'
     )
-    days_month.update_layout(
-        template='plotly_white',
-        yaxis=dict(tickformat='.2f', title='Rental Days'),
-        xaxis=dict(type='date', tickformat='%b %Y', tickmode='linear',
-                   dtick='M1', showgrid=False, title='', tickangle=45),
-        hovermode='x unified'
+    _apply_standard_figure_layout(
+        days_month,
+        'Rental Days by Month',
+        xaxis=_monthly_time_axis(len(days_month_data)),
+        yaxis=dict(tickformat='.2f', title='Rental Days', automargin=True),
+        height=380,
     )
 
     rev_month_data = build_complete_monthly_series(filtered_df, 'total_to_charge')
@@ -1799,12 +1850,12 @@ def update_all(stations, vehicle_types, plates, renters, years, months, start_da
         marker=dict(opacity=0.85),
         hovertemplate='<b>%{x|%b %Y}</b><br>Revenue: $%{y:,.2f}<extra></extra>'
     )
-    rev_month.update_layout(
-        template='plotly_white',
-        yaxis=dict(tickformat='$,.0f', title='Revenue'),
-        xaxis=dict(type='date', tickformat='%b %Y', tickmode='linear',
-                   dtick='M1', showgrid=False, title='', tickangle=45),
-        hovermode='x unified'
+    _apply_standard_figure_layout(
+        rev_month,
+        'Revenue by Month',
+        xaxis=_monthly_time_axis(len(rev_month_data)),
+        yaxis=dict(tickformat='$,.0f', title='Revenue', automargin=True),
+        height=380,
     )
     
     # Monthly Comparison (Executive view)
@@ -1912,21 +1963,14 @@ def update_all(stations, vehicle_types, plates, renters, years, months, start_da
 
                     metric_cards.append((metric_key, dbc.Card(
                         dbc.CardBody([
-                            html.Div(metric_label, style={'fontSize': '0.9rem', 'color': '#6b7280', 'fontWeight': '600', 'minHeight': '22px'}),
-                            html.Div(format_value(current_val, is_currency), style={'fontSize': '2rem', 'fontWeight': '700', 'color': '#1f2937', 'marginTop': '2px', 'minHeight': '48px'}),
+                            html.Div(metric_label, className='kpi-label'),
+                            html.Div(format_value(current_val, is_currency), className='kpi-value'),
                             html.Div(f"{mom_arrow} {mom_pct_text} vs last month", style={'color': mom_color, 'fontWeight': '600', 'fontSize': '0.92rem', 'marginTop': '8px', 'minHeight': '22px'}),
                             html.Div(f"Diff: {mom_diff_text}", style={'color': '#6b7280', 'fontSize': '0.85rem', 'minHeight': '20px'}),
                             html.Div(f"{yoy_arrow} {yoy_pct_text} vs last year", style={'color': yoy_color, 'fontWeight': '600', 'fontSize': '0.92rem', 'marginTop': '10px', 'minHeight': '22px'}),
                             html.Div(f"Diff: {yoy_diff_text}", style={'color': '#6b7280', 'fontSize': '0.85rem', 'minHeight': '20px'}),
-                        ], style={'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'flex-start', 'height': '100%', 'padding': '14px 16px'}),
-                        style={
-                            'backgroundColor': '#ffffff',
-                            'border': '1px solid #e5e7eb',
-                            'boxShadow': '0 2px 10px rgba(17, 24, 39, 0.06)',
-                            'borderRadius': '12px',
-                            'height': '100%',
-                            'width': '100%'
-                        }
+                        ], className='monthly-kpi-card-body'),
+                        className='kpi-card dashboard-kpi-card monthly-kpi-card'
                     )))
 
                 critical_metric_key = None
@@ -1952,7 +1996,7 @@ def update_all(stations, vehicle_types, plates, renters, years, months, start_da
                                 }
                             ),
                             card
-                        ], width=12, md=4, lg=4, className='d-flex flex-column', style={'marginBottom': '12px'})
+                        ], xs=12, xl=4, className='dashboard-kpi-col monthly-kpi-col')
                     )
 
                 monthly_agg = (
@@ -1979,13 +2023,12 @@ def update_all(stations, vehicle_types, plates, renters, years, months, start_da
                         marker=dict(size=8, color=marker_colors),
                         hovertemplate='<b>%{x|%b %Y}</b><br>' + (f'{title}: $%{{y:,.2f}}' if is_currency else f'{title}: %{{y:,.2f}}') + '<extra></extra>'
                     ))
-                    fig.update_layout(
-                        title=title,
-                        template='plotly_white',
-                        margin=dict(l=10, r=10, t=38, b=10),
-                        xaxis=dict(showgrid=False, tickformat='%b %y', title=''),
-                        yaxis=dict(showgrid=True, zeroline=False, tickformat='$,.0f' if is_currency else '.2f', title=''),
-                        hovermode='x unified'
+                    _apply_standard_figure_layout(
+                        fig,
+                        title,
+                        xaxis=_monthly_time_axis(len(monthly_agg)),
+                        yaxis=dict(showgrid=True, zeroline=False, tickformat='$,.0f' if is_currency else '.2f', title='', automargin=True),
+                        height=360,
                     )
                     return fig
 
@@ -2016,26 +2059,20 @@ def update_all(stations, vehicle_types, plates, renters, years, months, start_da
                 context_header = f"{current_label} vs {prev_label} and {yoy_label}"
 
                 monthly_content = html.Div([
-                    html.Div('Monthly Performance Story', style={'fontSize': '1.15rem', 'fontWeight': '700', 'color': '#1f2937', 'marginBottom': '2px'}),
+                    html.Div('Monthly Performance Story', className='section-subtitle'),
                     html.Div(context_header, style={'fontSize': '0.95rem', 'color': '#4b5563', 'marginBottom': '10px'}),
                     html.Div(selected_month_message or '', style={'color': '#0b66a0', 'marginBottom': '8px', 'display': 'block' if selected_month_message else 'none'}),
 
-                    dbc.Row(styled_cards, className='g-2', style={'marginBottom': '10px'}),
+                    dbc.Row(styled_cards, className='g-3 dashboard-kpi-row', style={'marginBottom': '14px'}),
 
                     dbc.Row([
-                        dbc.Col(dcc.Graph(figure=rentals_trend_fig, config={'displayModeBar': False}), width=12, md=4),
-                        dbc.Col(dcc.Graph(figure=days_trend_fig, config={'displayModeBar': False}), width=12, md=4),
-                        dbc.Col(dcc.Graph(figure=revenue_trend_fig, config={'displayModeBar': False}), width=12, md=4),
-                    ], className='g-2'),
+                        dbc.Col(dcc.Graph(figure=rentals_trend_fig, className='dashboard-graph', config={'displayModeBar': False, 'responsive': True}), xs=12, xl=4, className='dashboard-graph-col'),
+                        dbc.Col(dcc.Graph(figure=days_trend_fig, className='dashboard-graph', config={'displayModeBar': False, 'responsive': True}), xs=12, xl=4, className='dashboard-graph-col'),
+                        dbc.Col(dcc.Graph(figure=revenue_trend_fig, className='dashboard-graph', config={'displayModeBar': False, 'responsive': True}), xs=12, xl=4, className='dashboard-graph-col'),
+                    ], className='g-3 dashboard-chart-row'),
 
                     dbc.Alert(' '.join(insight_lines), color='light', style={'marginTop': '10px', 'border': '1px solid #e5e7eb'})
-                ], style={
-                    'backgroundColor': '#ffffff',
-                    'border': '1px solid #e5e7eb',
-                    'boxShadow': '0 4px 16px rgba(17, 24, 39, 0.08)',
-                    'borderRadius': '12px',
-                    'padding': '14px'
-                })
+                ], className='monthly-story-card')
     
     if active_tab == 'dealer' and not dealer_agg.empty:
         dealer_revenue_fig = px.bar(
