@@ -2396,8 +2396,12 @@ def update_all(stations, vehicle_types, plates, renters, years, months, start_da
                 styled_cards = []
                 for metric_key, card in metric_cards:
                     is_critical = metric_key == critical_metric_key
+                    card_node = card
                     if is_critical:
-                        card.style.update({'border': '2px solid #00708D', 'boxShadow': '0 6px 18px rgba(0, 112, 141, 0.18)', 'backgroundColor': '#f8fcfe'})
+                        card_node = html.Div(
+                            card,
+                            style={'border': '2px solid #00708D', 'borderRadius': '12px', 'boxShadow': '0 6px 18px rgba(0, 112, 141, 0.18)', 'backgroundColor': '#f8fcfe'}
+                        )
                     styled_cards.append(
                         dbc.Col([
                             html.Div(
@@ -2411,7 +2415,7 @@ def update_all(stations, vehicle_types, plates, renters, years, months, start_da
                                     'visibility': 'visible' if is_critical else 'hidden'
                                 }
                             ),
-                            card
+                            card_node
                         ], xs=12, xl=4, className='dashboard-kpi-col monthly-kpi-col')
                     )
 
