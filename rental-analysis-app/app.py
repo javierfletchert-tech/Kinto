@@ -594,12 +594,78 @@ app.layout = dbc.Container([
     html.Div(id='driver-content', children=[
         # Driver Analysis
         html.Hr(),
-        html.H3("Driver Analysis"),
+        html.H3("Driver Analysis", className='section-title'),
+        dbc.Row([
+            dbc.Col(dbc.Card([dbc.CardBody([
+                html.Div("Total Drivers", className='kpi-label'),
+                html.Div(id='driver_kpi_total', className='kpi-value')
+            ])], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=2, className='dashboard-kpi-col'),
+            dbc.Col(dbc.Card([dbc.CardBody([
+                html.Div("New Drivers (Period)", className='kpi-label'),
+                html.Div(id='driver_kpi_new', className='kpi-value')
+            ])], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=2, className='dashboard-kpi-col'),
+            dbc.Col(dbc.Card([dbc.CardBody([
+                html.Div("% New vs Total", className='kpi-label'),
+                html.Div(id='driver_kpi_new_pct', className='kpi-value')
+            ])], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=2, className='dashboard-kpi-col'),
+            dbc.Col(dbc.Card([dbc.CardBody([
+                html.Div("Avg Driver Tenure", className='kpi-label'),
+                html.Div(id='driver_kpi_avg_tenure', className='kpi-value')
+            ])], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=3, className='dashboard-kpi-col'),
+            dbc.Col(dbc.Card([dbc.CardBody([
+                html.Div("Returning Drivers", className='kpi-label'),
+                html.Div(id='driver_kpi_returning', className='kpi-value')
+            ])], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=3, className='dashboard-kpi-col'),
+        ], className='g-3 dashboard-kpi-row'),
+
+        dbc.Alert(id='driver_insight_summary', color='light', className='mt-2 mb-3', style={'border': '1px solid #e5e7eb'}),
+
+        dbc.Row([
+            dbc.Col(dcc.Graph(id='driver_new_over_time_chart', className='dashboard-graph', config={'responsive': True, 'displayModeBar': False}), xs=12, xl=6, className='dashboard-graph-col'),
+            dbc.Col(dcc.Graph(id='driver_active_vs_new_chart', className='dashboard-graph', config={'responsive': True, 'displayModeBar': False}), xs=12, xl=6, className='dashboard-graph-col'),
+        ], className='g-3 dashboard-chart-row'),
+
+        dbc.Row([
+            dbc.Col(dcc.Graph(id='driver_tenure_bucket_chart', className='dashboard-graph', config={'responsive': True, 'displayModeBar': False}), xs=12, xl=4, className='dashboard-graph-col'),
+            dbc.Col(dcc.Graph(id='driver_segment_chart', className='dashboard-graph', config={'responsive': True, 'displayModeBar': False}), xs=12, xl=4, className='dashboard-graph-col'),
+            dbc.Col(dcc.Graph(id='driver_gap_chart', className='dashboard-graph', config={'responsive': True, 'displayModeBar': False}), xs=12, xl=4, className='dashboard-graph-col'),
+        ], className='g-3 dashboard-chart-row'),
+
+        dbc.Row([
+            dbc.Col(dcc.Graph(id='driver_cohort_heatmap', className='dashboard-graph dashboard-graph-tall', config={'responsive': True, 'displayModeBar': False}), width=12, className='dashboard-graph-col'),
+        ], className='g-3 dashboard-chart-row'),
+
+        html.H5("Top Drivers", className='section-subtitle', style={'marginTop': '12px'}),
+        dash_table.DataTable(
+            id='driver_top_table',
+            columns=[
+                {'name': 'Customer ID', 'id': 'customer_id'},
+                {'name': 'Renter Name', 'id': 'renter_name'},
+                {'name': 'First Rental Date', 'id': 'first_rental_date'},
+                {'name': 'Tenure (Days)', 'id': 'driver_tenure_days', 'type': 'numeric', 'format': Format(precision=0, scheme=Scheme.fixed)},
+                {'name': 'Total Rentals', 'id': 'rentals', 'type': 'numeric', 'format': Format(precision=0, scheme=Scheme.fixed)},
+                {'name': 'Total Revenue', 'id': 'revenue', 'type': 'numeric', 'format': Format(precision=2, scheme=Scheme.fixed)},
+                {'name': 'Total Rental Days', 'id': 'rental_days', 'type': 'numeric', 'format': Format(precision=2, scheme=Scheme.fixed)},
+            ],
+            data=[],
+            sort_action='native',
+            filter_action='native',
+            page_size=10,
+            style_table={'overflowX': 'auto'},
+        ),
+
+        html.H5("Driver Detail Table", className='section-subtitle', style={'marginTop': '16px'}),
         dash_table.DataTable(
             id='driver_table',
             columns=[
+                {'name': 'Customer ID', 'id': 'customer_id'},
                 {'name': 'Renter Name', 'id': 'renter_name'},
-                {'name': 'Rentals', 'id': 'rentals', 'type': 'numeric', 'format': Format(precision=2, scheme=Scheme.fixed)},
+                {'name': 'First Rental Date', 'id': 'first_rental_date'},
+                {'name': 'Tenure Bucket', 'id': 'tenure_bucket'},
+                {'name': 'Tenure (Days)', 'id': 'driver_tenure_days', 'type': 'numeric', 'format': Format(precision=0, scheme=Scheme.fixed)},
+                {'name': 'Rentals', 'id': 'rentals', 'type': 'numeric', 'format': Format(precision=0, scheme=Scheme.fixed)},
+                {'name': 'Active Months', 'id': 'active_months', 'type': 'numeric', 'format': Format(precision=0, scheme=Scheme.fixed)},
+                {'name': 'Avg Days Between Rentals', 'id': 'avg_days_between_rentals', 'type': 'numeric', 'format': Format(precision=2, scheme=Scheme.fixed)},
                 {'name': 'Rental Days', 'id': 'rental_days', 'type': 'numeric', 'format': Format(precision=2, scheme=Scheme.fixed)},
                 {'name': 'Revenue', 'id': 'revenue', 'type': 'numeric', 'format': Format(precision=2, scheme=Scheme.fixed)},
                 {'name': 'Avg Duration', 'id': 'avg_duration', 'type': 'numeric', 'format': Format(precision=2, scheme=Scheme.fixed)},
@@ -1165,6 +1231,19 @@ def update_comparison_month_options(stations, vehicle_types, plates, renters, ye
     Output('vehicle_high_mileage_table', 'data'),
      Output('rental_table', 'data'),
      Output('driver_table', 'data'),
+    Output('driver_kpi_total', 'children'),
+    Output('driver_kpi_new', 'children'),
+    Output('driver_kpi_new_pct', 'children'),
+    Output('driver_kpi_avg_tenure', 'children'),
+    Output('driver_kpi_returning', 'children'),
+    Output('driver_insight_summary', 'children'),
+    Output('driver_new_over_time_chart', 'figure'),
+    Output('driver_active_vs_new_chart', 'figure'),
+    Output('driver_tenure_bucket_chart', 'figure'),
+    Output('driver_segment_chart', 'figure'),
+    Output('driver_cohort_heatmap', 'figure'),
+    Output('driver_gap_chart', 'figure'),
+    Output('driver_top_table', 'data'),
      Output('rentals_by_month', 'figure'),
      Output('rentals_by_dow', 'figure'),
      Output('rentals_by_hour', 'figure'),
@@ -1760,14 +1839,351 @@ def update_all(stations, vehicle_types, plates, renters, years, months, start_da
     rental_table_df['rental_end_datetime_EST'] = rental_table_df['rental_end_datetime_EST'].dt.strftime('%Y-%m-%d')
     rental_data = rental_table_df.to_dict('records')
     
-    # Driver table
-    driver_agg = filtered_df.groupby('renter_name').agg({
-        'rental_id': 'count',
-        'rental_days': ['sum', 'mean'],
-        'total_to_charge': ['sum', 'mean'],
-        'kms_traveled': 'mean'
-    }).reset_index()
-    driver_agg.columns = ['renter_name', 'rentals', 'rental_days', 'avg_duration', 'revenue', 'avg_revenue', 'avg_kms']
+    # Driver lifecycle & behavior analytics (customer_id-based)
+    def _empty_driver_figure(title, y_title=''):
+        fig = go.Figure()
+        _apply_standard_figure_layout(
+            fig,
+            title,
+            xaxis=dict(showgrid=False, title='', automargin=True),
+            yaxis=dict(title=y_title, showgrid=True, gridcolor='rgba(156,163,175,0.20)', zeroline=False, automargin=True),
+            height=360,
+        )
+        fig.update_layout(
+            annotations=[dict(text='No data available for selected filters', x=0.5, y=0.5, xref='paper', yref='paper', showarrow=False, font=dict(color='#6b7280'))]
+        )
+        return fig
+
+    filtered_driver_df = filtered_df.copy()
+    full_history_df = df.copy()
+
+    if 'customer_id' in filtered_driver_df.columns:
+        filtered_driver_df['customer_id'] = filtered_driver_df['customer_id'].astype(str).str.strip()
+        filtered_driver_df.loc[filtered_driver_df['customer_id'].isin(['', 'nan', 'None']), 'customer_id'] = pd.NA
+    else:
+        filtered_driver_df['customer_id'] = pd.NA
+
+    if 'customer_id' in full_history_df.columns:
+        full_history_df['customer_id'] = full_history_df['customer_id'].astype(str).str.strip()
+        full_history_df.loc[full_history_df['customer_id'].isin(['', 'nan', 'None']), 'customer_id'] = pd.NA
+    else:
+        full_history_df['customer_id'] = pd.NA
+
+    filtered_driver_df['customer_id'] = filtered_driver_df['customer_id'].fillna('RENTER:' + filtered_driver_df['renter_name'].fillna('Unknown').astype(str))
+    full_history_df['customer_id'] = full_history_df['customer_id'].fillna('RENTER:' + full_history_df['renter_name'].fillna('Unknown').astype(str))
+
+    full_first_rental = (
+        full_history_df
+        .dropna(subset=['rental_started_at_EST'])
+        .groupby('customer_id', as_index=False)['rental_started_at_EST']
+        .min()
+        .rename(columns={'rental_started_at_EST': 'first_rental_date'})
+    )
+
+    filtered_driver_df = filtered_driver_df.merge(full_first_rental, on='customer_id', how='left')
+
+    if filtered_driver_df.empty:
+        driver_agg = pd.DataFrame(columns=['customer_id', 'renter_name', 'first_rental_date', 'tenure_bucket', 'driver_tenure_days', 'rentals', 'active_months', 'avg_days_between_rentals', 'rental_days', 'revenue', 'avg_duration', 'avg_revenue', 'avg_kms'])
+        driver_top_table_data = []
+        driver_kpi_total = '0'
+        driver_kpi_new = '0'
+        driver_kpi_new_pct = '0.0%'
+        driver_kpi_avg_tenure = '0 days'
+        driver_kpi_returning = '0.0%'
+        driver_insight = 'No driver activity for the selected filters and period.'
+        driver_new_over_time_fig = _empty_driver_figure('New Drivers Over Time', 'Drivers')
+        driver_active_vs_new_fig = _empty_driver_figure('Active vs New Drivers', 'Drivers')
+        driver_tenure_bucket_fig = _empty_driver_figure('Driver Tenure Buckets', 'Drivers')
+        driver_segment_fig = _empty_driver_figure('Driver Value Segmentation', 'Drivers')
+        driver_cohort_fig = _empty_driver_figure('Driver Cohort Retention (%)', 'Retention %')
+        driver_gap_fig = _empty_driver_figure('Avg Days Between Rentals', 'Days')
+    else:
+        latest_reference_date = pd.to_datetime(filtered_driver_df['rental_started_at_EST']).max().normalize()
+        filtered_driver_df['driver_tenure_days'] = (latest_reference_date - pd.to_datetime(filtered_driver_df['first_rental_date']).dt.normalize()).dt.days.clip(lower=0)
+        filtered_driver_df['tenure_bucket'] = pd.cut(
+            filtered_driver_df['driver_tenure_days'],
+            bins=[-1, 30, 90, 180, 10**9],
+            labels=['New (0-30)', 'Early (31-90)', 'Mid (91-180)', 'Mature (180+)']
+        )
+
+        filtered_driver_df['rental_month'] = filtered_driver_df['rental_started_at_EST'].dt.to_period('M').dt.to_timestamp()
+        filtered_driver_df = filtered_driver_df.sort_values(['customer_id', 'rental_started_at_EST'])
+        filtered_driver_df['days_since_prev_rental'] = filtered_driver_df.groupby('customer_id')['rental_started_at_EST'].diff().dt.days
+
+        active_months = filtered_driver_df.groupby('customer_id')['rental_month'].nunique().rename('active_months')
+        avg_days_between = filtered_driver_df.groupby('customer_id')['days_since_prev_rental'].mean().rename('avg_days_between_rentals')
+
+        driver_agg = filtered_driver_df.groupby('customer_id').agg(
+            renter_name=('renter_name', 'first'),
+            first_rental_date=('first_rental_date', 'first'),
+            tenure_bucket=('tenure_bucket', 'first'),
+            driver_tenure_days=('driver_tenure_days', 'first'),
+            rentals=('rental_id', 'count'),
+            rental_days=('rental_days', 'sum'),
+            avg_duration=('rental_days', 'mean'),
+            revenue=('total_to_charge', 'sum'),
+            avg_revenue=('total_to_charge', 'mean'),
+            avg_kms=('kms_traveled', 'mean')
+        ).reset_index()
+
+        driver_agg = driver_agg.merge(active_months, on='customer_id', how='left')
+        driver_agg = driver_agg.merge(avg_days_between, on='customer_id', how='left')
+        driver_agg['active_months'] = driver_agg['active_months'].fillna(1)
+        driver_agg['avg_days_between_rentals'] = driver_agg['avg_days_between_rentals'].fillna(0)
+        driver_agg['first_rental_date'] = pd.to_datetime(driver_agg['first_rental_date']).dt.strftime('%Y-%m-%d')
+        driver_agg['tenure_bucket'] = driver_agg['tenure_bucket'].astype(str).replace('nan', 'Unknown')
+
+        period_start = pd.to_datetime(filtered_driver_df['rental_started_at_EST']).min().normalize()
+        period_end = pd.to_datetime(filtered_driver_df['rental_started_at_EST']).max().normalize()
+
+        first_dates_by_driver = filtered_driver_df[['customer_id', 'first_rental_date']].drop_duplicates('customer_id')
+        new_drivers_period = first_dates_by_driver[
+            (pd.to_datetime(first_dates_by_driver['first_rental_date']).dt.normalize() >= period_start) &
+            (pd.to_datetime(first_dates_by_driver['first_rental_date']).dt.normalize() <= period_end)
+        ]['customer_id'].nunique()
+
+        total_drivers = int(driver_agg['customer_id'].nunique())
+        pct_new = (new_drivers_period / total_drivers * 100) if total_drivers else 0
+        avg_tenure_days = float(pd.to_numeric(driver_agg['driver_tenure_days'], errors='coerce').fillna(0).mean()) if total_drivers else 0
+
+        first_month_per_driver = filtered_driver_df.groupby('customer_id')['first_rental_date'].first().dt.to_period('M').dt.to_timestamp()
+        returned_after_first = filtered_driver_df.assign(
+            first_month=filtered_driver_df['customer_id'].map(first_month_per_driver)
+        ).groupby('customer_id').apply(lambda d: (d['rental_month'] > d['first_month']).any())
+        returning_pct = float(returned_after_first.mean() * 100) if len(returned_after_first) else 0
+        active_2plus_pct = float((driver_agg['active_months'] >= 2).mean() * 100) if total_drivers else 0
+
+        driver_kpi_total = f"{total_drivers:,}"
+        driver_kpi_new = f"{new_drivers_period:,}"
+        driver_kpi_new_pct = f"{pct_new:.1f}%"
+        driver_kpi_avg_tenure = f"{avg_tenure_days:,.0f} days"
+        driver_kpi_returning = f"{active_2plus_pct:.1f}%"
+
+        # New drivers over time
+        new_monthly = (
+            first_dates_by_driver.assign(first_rental_month=pd.to_datetime(first_dates_by_driver['first_rental_date']).dt.to_period('M').dt.to_timestamp())
+            .groupby('first_rental_month', as_index=False)['customer_id']
+            .nunique()
+            .rename(columns={'customer_id': 'new_drivers'})
+            .sort_values('first_rental_month')
+        )
+
+        driver_new_over_time_fig = px.bar(
+            new_monthly,
+            x='first_rental_month',
+            y='new_drivers',
+            title='New Drivers Over Time',
+            color_discrete_sequence=['#00708D']
+        ) if not new_monthly.empty else _empty_driver_figure('New Drivers Over Time', 'Drivers')
+
+        if not new_monthly.empty:
+            _apply_standard_figure_layout(
+                driver_new_over_time_fig,
+                'New Drivers Over Time',
+                xaxis=_monthly_time_axis(len(new_monthly)),
+                yaxis=dict(title='Drivers', tickformat=',.0f', automargin=True),
+                height=360,
+            )
+
+        # Active vs new drivers
+        active_monthly = (
+            filtered_driver_df.groupby('rental_month', as_index=False)['customer_id']
+            .nunique()
+            .rename(columns={'customer_id': 'active_drivers'})
+            .sort_values('rental_month')
+        )
+        active_new_monthly = active_monthly.merge(
+            new_monthly.rename(columns={'first_rental_month': 'rental_month'}),
+            on='rental_month', how='left'
+        ) if not active_monthly.empty else pd.DataFrame(columns=['rental_month', 'active_drivers', 'new_drivers'])
+        active_new_monthly['new_drivers'] = active_new_monthly.get('new_drivers', 0).fillna(0)
+
+        if active_new_monthly.empty:
+            driver_active_vs_new_fig = _empty_driver_figure('Active vs New Drivers', 'Drivers')
+        else:
+            driver_active_vs_new_fig = go.Figure()
+            driver_active_vs_new_fig.add_trace(go.Scatter(
+                x=active_new_monthly['rental_month'], y=active_new_monthly['active_drivers'],
+                mode='lines+markers', name='Active Drivers', line=dict(color='#2C353B', width=3)
+            ))
+            driver_active_vs_new_fig.add_trace(go.Scatter(
+                x=active_new_monthly['rental_month'], y=active_new_monthly['new_drivers'],
+                mode='lines+markers', name='New Drivers', line=dict(color='#00708D', width=3, dash='dash')
+            ))
+            _apply_standard_figure_layout(
+                driver_active_vs_new_fig,
+                'Active vs New Drivers',
+                xaxis=_monthly_time_axis(len(active_new_monthly)),
+                yaxis=dict(title='Drivers', tickformat=',.0f', automargin=True),
+                height=360,
+                show_legend=True,
+                legend_y=1.08,
+            )
+
+        # Tenure bucket distribution
+        tenure_bucket_df = (
+            driver_agg.groupby('tenure_bucket', as_index=False)['customer_id']
+            .count()
+            .rename(columns={'customer_id': 'drivers'})
+        )
+        tenure_order = ['New (0-30)', 'Early (31-90)', 'Mid (91-180)', 'Mature (180+)']
+        tenure_bucket_df['tenure_bucket'] = pd.Categorical(tenure_bucket_df['tenure_bucket'], categories=tenure_order, ordered=True)
+        tenure_bucket_df = tenure_bucket_df.sort_values('tenure_bucket')
+        driver_tenure_bucket_fig = px.bar(
+            tenure_bucket_df,
+            x='tenure_bucket', y='drivers',
+            title='Driver Tenure Buckets',
+            color_discrete_sequence=['#00708D']
+        ) if not tenure_bucket_df.empty else _empty_driver_figure('Driver Tenure Buckets', 'Drivers')
+        if not tenure_bucket_df.empty:
+            _apply_standard_figure_layout(
+                driver_tenure_bucket_fig,
+                'Driver Tenure Buckets',
+                xaxis=dict(showgrid=False, title='', tickangle=0, automargin=True),
+                yaxis=dict(title='Drivers', tickformat=',.0f', automargin=True),
+                height=360,
+            )
+
+        # Driver value segmentation
+        segment_df = driver_agg[['customer_id', 'revenue']].copy()
+        if len(segment_df) >= 3:
+            q1, q2 = segment_df['revenue'].quantile([0.33, 0.66]).tolist()
+            conditions = [segment_df['revenue'] <= q1, (segment_df['revenue'] > q1) & (segment_df['revenue'] <= q2), segment_df['revenue'] > q2]
+            labels = ['Low activity', 'Medium', 'High value']
+            segment_df['segment'] = pd.Series(pd.Categorical(pd.NA, categories=labels))
+            segment_df.loc[conditions[0], 'segment'] = labels[0]
+            segment_df.loc[conditions[1], 'segment'] = labels[1]
+            segment_df.loc[conditions[2], 'segment'] = labels[2]
+        else:
+            segment_df['segment'] = 'Low activity'
+
+        segment_summary = segment_df.groupby('segment', as_index=False).agg(
+            drivers=('customer_id', 'count'),
+            revenue=('revenue', 'sum')
+        )
+        segment_order = ['Low activity', 'Medium', 'High value']
+        segment_summary['segment'] = pd.Categorical(segment_summary['segment'], categories=segment_order, ordered=True)
+        segment_summary = segment_summary.sort_values('segment')
+        total_segment_revenue = segment_summary['revenue'].sum() if not segment_summary.empty else 0
+        segment_summary['revenue_share'] = ((segment_summary['revenue'] / total_segment_revenue) * 100).fillna(0) if total_segment_revenue else 0
+
+        driver_segment_fig = go.Figure()
+        if not segment_summary.empty:
+            driver_segment_fig.add_trace(go.Bar(
+                x=segment_summary['segment'], y=segment_summary['drivers'], name='Drivers', marker_color='#00708D'
+            ))
+            driver_segment_fig.add_trace(go.Scatter(
+                x=segment_summary['segment'], y=segment_summary['revenue_share'], name='Revenue Share %',
+                mode='lines+markers', yaxis='y2', line=dict(color='#d4420b', width=2.5)
+            ))
+            _apply_standard_figure_layout(
+                driver_segment_fig,
+                'Driver Value Segmentation',
+                xaxis=dict(showgrid=False, title='', automargin=True),
+                yaxis=dict(title='Drivers', tickformat=',.0f', automargin=True),
+                height=360,
+                show_legend=True,
+                legend_y=1.08,
+            )
+            driver_segment_fig.update_layout(
+                yaxis2=dict(title='Revenue Share %', overlaying='y', side='right', tickformat='.1f', automargin=True)
+            )
+        else:
+            driver_segment_fig = _empty_driver_figure('Driver Value Segmentation', 'Drivers')
+
+        # Cohort heatmap
+        cohort_activity = filtered_driver_df[['customer_id', 'rental_month']].drop_duplicates().copy()
+        cohort_activity['first_rental_month'] = cohort_activity['customer_id'].map(first_month_per_driver)
+        cohort_activity['cohort_index'] = (
+            (cohort_activity['rental_month'].dt.year - cohort_activity['first_rental_month'].dt.year) * 12 +
+            (cohort_activity['rental_month'].dt.month - cohort_activity['first_rental_month'].dt.month)
+        )
+        cohort_activity = cohort_activity[cohort_activity['cohort_index'] >= 0]
+
+        cohort_sizes = cohort_activity[cohort_activity['cohort_index'] == 0].groupby('first_rental_month')['customer_id'].nunique()
+        cohort_counts = cohort_activity.groupby(['first_rental_month', 'cohort_index'])['customer_id'].nunique().reset_index(name='drivers')
+        cohort_counts['cohort_size'] = cohort_counts['first_rental_month'].map(cohort_sizes)
+        cohort_counts['retention_pct'] = (cohort_counts['drivers'] / cohort_counts['cohort_size'] * 100).fillna(0)
+        cohort_counts = cohort_counts[cohort_counts['cohort_index'] <= 12]
+
+        if cohort_counts.empty:
+            driver_cohort_fig = _empty_driver_figure('Driver Cohort Retention (%)', 'Retention %')
+        else:
+            cohort_pivot = cohort_counts.pivot(index='first_rental_month', columns='cohort_index', values='retention_pct').fillna(0)
+            cohort_y = [pd.Timestamp(idx).strftime('%Y-%m') for idx in cohort_pivot.index]
+            driver_cohort_fig = go.Figure(data=go.Heatmap(
+                z=cohort_pivot.values,
+                x=[f'M+{int(c)}' for c in cohort_pivot.columns],
+                y=cohort_y,
+                colorscale='Blues',
+                colorbar=dict(title='Retention %'),
+                hovertemplate='Cohort: %{y}<br>Offset: %{x}<br>Retention: %{z:.1f}%<extra></extra>'
+            ))
+            _apply_standard_figure_layout(
+                driver_cohort_fig,
+                'Driver Cohort Retention (%)',
+                xaxis=dict(showgrid=False, title='Months Since First Rental', automargin=True),
+                yaxis=dict(showgrid=False, title='Cohort Month', automargin=True),
+                height=430,
+                hovermode='closest',
+            )
+
+        # Engagement frequency (days between rentals)
+        gap_summary = (
+            driver_agg[['customer_id', 'avg_days_between_rentals']]
+            .dropna()
+            .sort_values('avg_days_between_rentals', ascending=False)
+            .head(15)
+        )
+
+        if gap_summary.empty:
+            driver_gap_fig = _empty_driver_figure('Avg Days Between Rentals', 'Days')
+        else:
+            driver_gap_fig = px.bar(
+                gap_summary.sort_values('avg_days_between_rentals', ascending=True),
+                x='avg_days_between_rentals',
+                y='customer_id',
+                orientation='h',
+                title='Avg Days Between Rentals (Top 15 Drivers)',
+                color_discrete_sequence=['#2C353B']
+            )
+            _apply_standard_figure_layout(
+                driver_gap_fig,
+                'Avg Days Between Rentals (Top 15 Drivers)',
+                xaxis=dict(title='Days', tickformat='.1f', automargin=True),
+                yaxis=dict(title='Customer ID', automargin=True),
+                height=360,
+            )
+
+        # Top drivers table
+        top_driver_df = driver_agg.sort_values(['rentals', 'revenue'], ascending=[False, False]).head(20).copy()
+        driver_top_table_data = top_driver_df[
+            ['customer_id', 'renter_name', 'first_rental_date', 'driver_tenure_days', 'rentals', 'revenue', 'rental_days']
+        ].to_dict('records')
+
+        # Storytelling summary
+        monthly_new = active_new_monthly.sort_values('rental_month') if not active_new_monthly.empty else pd.DataFrame()
+        if len(monthly_new) >= 2:
+            latest_new = float(monthly_new['new_drivers'].iloc[-1])
+            prev_new = float(monthly_new['new_drivers'].iloc[-2])
+            if prev_new == 0:
+                acquisition_text = f"New driver acquisition in the latest month is {latest_new:,.0f} drivers (no prior-month baseline)."
+            else:
+                pct_delta_new = ((latest_new - prev_new) / prev_new) * 100
+                trend_word = 'increased' if pct_delta_new > 0 else ('decreased' if pct_delta_new < 0 else 'remained stable')
+                acquisition_text = f"Driver acquisition {trend_word} {abs(pct_delta_new):.1f}% vs previous month."
+        else:
+            acquisition_text = 'Not enough monthly history to compare new-driver acquisition trend.'
+
+        top_share = 0.0
+        if total_segment_revenue and not top_driver_df.empty:
+            top_share = (top_driver_df.head(10)['revenue'].sum() / total_segment_revenue) * 100
+
+        retention_trend = 'improving' if active_2plus_pct >= 50 else 'declining'
+        driver_insight = (
+            f"{acquisition_text} Returning-driver rate is {active_2plus_pct:.1f}% and appears {retention_trend}. "
+            f"High-value concentration: top 10 drivers contribute {top_share:.1f}% of selected-period revenue."
+        )
     
     # Time analysis with data labels
     rentals_month_data = build_complete_monthly_series(filtered_df.groupby('year_month_dt').size().reset_index(name='count'), 'count')
@@ -2132,6 +2548,10 @@ def update_all(stations, vehicle_types, plates, renters, years, months, start_da
             empty_state_style, card_15000_style, card_15_20_style, card_20_style,
             high_mileage_data,
             rental_data, driver_agg.to_dict('records'),
+            driver_kpi_total, driver_kpi_new, driver_kpi_new_pct, driver_kpi_avg_tenure, driver_kpi_returning,
+            driver_insight,
+            driver_new_over_time_fig, driver_active_vs_new_fig, driver_tenure_bucket_fig, driver_segment_fig, driver_cohort_fig, driver_gap_fig,
+            driver_top_table_data,
             rentals_month, rentals_dow, rentals_hour, days_month, rev_month, monthly_content, dealer_revenue_fig, dealer_days_fig)
 
 
@@ -2798,4 +3218,12 @@ def refresh_all_data(n_clicks, counter):
 
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    host = os.getenv('HOST', '0.0.0.0')
+    port = int(os.getenv('PORT', '8050'))
+    debug = os.getenv('DEBUG', '').strip().lower() in {'1', 'true', 'yes'}
+
+    if debug:
+        app.run(debug=True, host=host, port=port)
+    else:
+        from waitress import serve
+        serve(server, host=host, port=port, threads=8)
