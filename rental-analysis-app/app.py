@@ -2317,7 +2317,7 @@ def update_all(stations, vehicle_types, plates, renters, years, months, start_da
 
                 def compute_change(curr, base):
                     if curr is None or base is None:
-                        return None, None, 'neutral', 'N/A', 'N/A'
+                        return None, None, 'neutral', 'N/A', '#6c757d', 'N/A'
                     diff = curr - base
                     if base == 0:
                         pct = None
