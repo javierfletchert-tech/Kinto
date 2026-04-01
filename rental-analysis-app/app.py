@@ -2632,7 +2632,12 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
     rental_table_df['rental_started_at_EST'] = rental_table_df['rental_started_at_EST'].dt.strftime('%Y-%m-%d %H:%M')
     rental_table_df['rental_end_datetime_EST'] = rental_table_df['rental_end_datetime_EST'].dt.strftime('%Y-%m-%d %H:%M')
     rental_table_df['rental_end_datetime_EST'] = rental_table_df['rental_end_datetime_EST'].fillna('Ongoing')
-    rental_table_df['ongoing_risk_bucket'] = rental_table_df['ongoing_risk_bucket'].replace({'None': ''})
+    rental_table_df['ongoing_risk_bucket'] = (
+        rental_table_df['ongoing_risk_bucket']
+        .astype('string')
+        .replace({'None': ''})
+        .fillna('')
+    )
     rental_table_df = rental_table_df.sort_values(by=['is_ongoing_rental', 'rental_days'], ascending=[False, False])
     rental_table_df = rental_table_df.drop(columns=['is_ongoing_rental'])
     rental_data = rental_table_df.to_dict('records')
