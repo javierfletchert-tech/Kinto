@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import os
 from pathlib import Path
+from collections import OrderedDict
 
 EXPENSE_UNIT_STATUS_OPTIONS = ['Onboarded', 'Offboarded', 'Sold']
 ONGOING_ACTIVE_STATUSES = {'active', 'ongoing', 'in progress', 'in_progress'}
@@ -258,6 +259,73 @@ inv_date_min = inv_df['Date of submission'].dropna().min().date()
 inv_date_max = inv_df['Date of submission'].dropna().max().date()
 fleet_status_values = sorted([str(s) for s in fleet_df['Status'].dropna().unique()])
 
+# Global lookups and lightweight in-memory cache for expensive callback outputs
+vehicle_mileage_lookup = pd.DataFrame(columns=['VIN', 'current_mileage'])
+driver_first_rental_lookup = pd.DataFrame(columns=['customer_id', 'first_rental_date'])
+UPDATE_ALL_CACHE_MAX = int(os.getenv('UPDATE_ALL_CACHE_MAX', '24'))
+_UPDATE_ALL_CACHE = OrderedDict()
+
+
+def _normalize_cache_key(value):
+    if isinstance(value, dict):
+        return tuple(sorted((str(k), _normalize_cache_key(v)) for k, v in value.items()))
+    if isinstance(value, (list, tuple, set)):
+        return tuple(_normalize_cache_key(v) for v in value)
+    if isinstance(value, (pd.Timestamp, datetime)):
+        return pd.Timestamp(value).isoformat()
+    if isinstance(value, pd.Series):
+        return tuple(_normalize_cache_key(v) for v in value.tolist())
+    return value
+
+
+def _cache_get(key):
+    value = _UPDATE_ALL_CACHE.get(key)
+    if value is not None:
+        _UPDATE_ALL_CACHE.move_to_end(key)
+    return value
+
+
+def _cache_set(key, value):
+    _UPDATE_ALL_CACHE[key] = value
+    _UPDATE_ALL_CACHE.move_to_end(key)
+    while len(_UPDATE_ALL_CACHE) > UPDATE_ALL_CACHE_MAX:
+        _UPDATE_ALL_CACHE.popitem(last=False)
+
+
+def _rebuild_reference_lookups():
+    global vehicle_mileage_lookup, driver_first_rental_lookup
+
+    mileage_history = df[['VIN', 'mileage_end']].copy() if {'VIN', 'mileage_end'}.issubset(df.columns) else pd.DataFrame(columns=['VIN', 'mileage_end'])
+    if not mileage_history.empty:
+        mileage_history['mileage_end'] = pd.to_numeric(mileage_history['mileage_end'], errors='coerce')
+        vehicle_mileage_lookup = (
+            mileage_history.dropna(subset=['VIN', 'mileage_end'])
+            .groupby('VIN', as_index=False)['mileage_end']
+            .max()
+            .rename(columns={'mileage_end': 'current_mileage'})
+        )
+    else:
+        vehicle_mileage_lookup = pd.DataFrame(columns=['VIN', 'current_mileage'])
+
+    full_history_df = df[['customer_id', 'rental_started_at_EST', 'renter_name']].copy()
+    if 'customer_id' in full_history_df.columns:
+        full_history_df['customer_id'] = full_history_df['customer_id'].astype(str).str.strip()
+        full_history_df.loc[full_history_df['customer_id'].isin(['', 'nan', 'None']), 'customer_id'] = pd.NA
+    else:
+        full_history_df['customer_id'] = pd.NA
+    full_history_df['customer_id'] = full_history_df['customer_id'].fillna('RENTER:' + full_history_df['renter_name'].fillna('Unknown').astype(str))
+
+    driver_first_rental_lookup = (
+        full_history_df
+        .dropna(subset=['rental_started_at_EST'])
+        .groupby('customer_id', as_index=False)['rental_started_at_EST']
+        .min()
+        .rename(columns={'rental_started_at_EST': 'first_rental_date'})
+    )
+
+
+_rebuild_reference_lookups()
+
 
 def _reload_data():
     """Re-read all source Excel files and recompute all global dataframes."""
@@ -308,6 +376,9 @@ def _reload_data():
     inv_date_min = inv_df['Date of submission'].dropna().min().date()
     inv_date_max = inv_df['Date of submission'].dropna().max().date()
     fleet_status_values = sorted([str(s) for s in fleet_df['Status'].dropna().unique()])
+
+    _rebuild_reference_lookups()
+    _UPDATE_ALL_CACHE.clear()
 
 
 # App
@@ -1593,6 +1664,28 @@ def update_comparison_month_options(stations, vehicle_types, plates, years, mont
     Input('data-refresh-counter', 'data')]
 )
 def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, years, months, start_date, end_date, comparison_month, active_tab, vins, fleet_statuses=None, selected_vehicle=None, selected_band=None, _refresh=None):
+    cache_key = (
+        _normalize_cache_key(stations),
+        _normalize_cache_key(vehicle_types),
+        _normalize_cache_key(plates),
+        _normalize_cache_key(rental_renters),
+        _normalize_cache_key(driver_renters),
+        _normalize_cache_key(years),
+        _normalize_cache_key(months),
+        _normalize_cache_key(start_date),
+        _normalize_cache_key(end_date),
+        _normalize_cache_key(comparison_month),
+        _normalize_cache_key(active_tab),
+        _normalize_cache_key(vins),
+        _normalize_cache_key(fleet_statuses),
+        _normalize_cache_key(selected_vehicle),
+        _normalize_cache_key(selected_band),
+        _normalize_cache_key(_refresh),
+    )
+    cached_result = _cache_get(cache_key)
+    if cached_result is not None:
+        return cached_result
+
     def _build_monthly_metrics_map(source_df):
         if source_df.empty:
             return {}, None
@@ -2295,17 +2388,8 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
 
     vehicle_perf_df['avg_revenue'] = vehicle_perf_df['revenue'] / vehicle_perf_df['rentals']
 
-    # Current mileage from full rental history (not date-limited), aggregated by VIN
-    mileage_history = df[['VIN', 'mileage_end']].copy()
-    mileage_history['mileage_end'] = pd.to_numeric(mileage_history['mileage_end'], errors='coerce')
-    mileage_lookup = (
-        mileage_history.dropna(subset=['VIN', 'mileage_end'])
-        .groupby('VIN', as_index=False)['mileage_end']
-        .max()
-        .rename(columns={'mileage_end': 'current_mileage'})
-    )
-
-    vehicle_perf_df = vehicle_perf_df.merge(mileage_lookup, on='VIN', how='left')
+    # Current mileage lookup is precomputed globally and refreshed on data reload.
+    vehicle_perf_df = vehicle_perf_df.merge(vehicle_mileage_lookup, on='VIN', how='left')
     vehicle_perf_df['current_mileage'] = pd.to_numeric(vehicle_perf_df['current_mileage'], errors='coerce')
     vehicle_perf_df['MY'] = pd.to_numeric(vehicle_perf_df['MY'], errors='coerce')
 
@@ -2767,7 +2851,6 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
         return fig
 
     filtered_driver_df = filtered_df.copy()
-    full_history_df = df.copy()
 
     if 'customer_id' in filtered_driver_df.columns:
         filtered_driver_df['customer_id'] = filtered_driver_df['customer_id'].astype(str).str.strip()
@@ -2775,24 +2858,8 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
     else:
         filtered_driver_df['customer_id'] = pd.NA
 
-    if 'customer_id' in full_history_df.columns:
-        full_history_df['customer_id'] = full_history_df['customer_id'].astype(str).str.strip()
-        full_history_df.loc[full_history_df['customer_id'].isin(['', 'nan', 'None']), 'customer_id'] = pd.NA
-    else:
-        full_history_df['customer_id'] = pd.NA
-
     filtered_driver_df['customer_id'] = filtered_driver_df['customer_id'].fillna('RENTER:' + filtered_driver_df['renter_name'].fillna('Unknown').astype(str))
-    full_history_df['customer_id'] = full_history_df['customer_id'].fillna('RENTER:' + full_history_df['renter_name'].fillna('Unknown').astype(str))
-
-    full_first_rental = (
-        full_history_df
-        .dropna(subset=['rental_started_at_EST'])
-        .groupby('customer_id', as_index=False)['rental_started_at_EST']
-        .min()
-        .rename(columns={'rental_started_at_EST': 'first_rental_date'})
-    )
-
-    filtered_driver_df = filtered_driver_df.merge(full_first_rental, on='customer_id', how='left')
+    filtered_driver_df = filtered_driver_df.merge(driver_first_rental_lookup, on='customer_id', how='left')
 
     if filtered_driver_df.empty:
         driver_agg = pd.DataFrame(columns=['customer_id', 'renter_name', 'first_rental_date', 'tenure_bucket', 'driver_tenure_days', 'rentals', 'active_months', 'avg_days_between_rentals', 'rental_days', 'revenue', 'avg_duration', 'avg_revenue', 'avg_kms'])
@@ -3184,7 +3251,9 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
     
 
     # Monthly Comparison (Executive view)
-    if cumulative_filtered_df.empty:
+    if active_tab != 'monthly':
+        monthly_content = dash.no_update
+    elif cumulative_filtered_df.empty:
         monthly_content = dbc.Alert("No data available for the selected filters", color="info")
     else:
         monthly_scope_ignore_global_month = monthly_scope_ignore_global_month_df.copy()
@@ -3831,7 +3900,7 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
         dealer_rentals_per_driver_fig = go.Figure()
         dealer_efficiency_scatter_fig = go.Figure()
 
-    return (f"${total_rev:,.0f}", f"{total_rentals:,.0f}", f"{total_days:,.0f}", f"${avg_rev:.2f}", f"{total_kms:,.0f}", f"{avg_kms:,.0f}",
+    result = (f"${total_rev:,.0f}", f"{total_rentals:,.0f}", f"{total_days:,.0f}", f"${avg_rev:.2f}", f"{total_kms:,.0f}", f"{avg_kms:,.0f}",
             trend_rev, trend_rentals, trend_days,
             projected_month_end_revenue, projected_month_end_rentals, projected_month_end_days,
             cum_revenue_summary, cum_rentals_summary, cum_days_summary,
@@ -3859,6 +3928,9 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
             dealer_mirai_performance_fig, 
             dealer_repeat_driver_rate_fig, dealer_rentals_per_driver_fig, 
             dealer_efficiency_scatter_fig)
+
+    _cache_set(cache_key, result)
+    return result
 
 
 @app.callback(
