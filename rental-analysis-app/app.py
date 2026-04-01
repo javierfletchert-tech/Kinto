@@ -314,7 +314,7 @@ def _reload_data():
 import time
 cache_bust = int(time.time() * 1000)
 
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], compress=True)
 server = app.server
 app.config.suppress_callback_exceptions = True
 

@@ -1,0 +1,27 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Excel temp/lock files
+~$*.xlsx
+
+# Local logs and temp
+*.log
+*.tmp
+
+# Python tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
