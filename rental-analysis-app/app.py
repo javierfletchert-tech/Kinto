@@ -80,7 +80,9 @@ def _get_dealer_brand(value):
 
 def _append_dealer_branding(dataframe, dealer_column, prefix='dealer'):
     frame = dataframe.copy()
-    brands = frame[dealer_column].apply(_get_dealer_brand)
+    # Convert to object dtype first — categorical Series returns unhashable dicts via .apply(),
+    # which causes "TypeError: unhashable type: 'dict'" inside pandas Categorical.map().
+    brands = frame[dealer_column].astype(object).apply(_get_dealer_brand)
     frame[f'{prefix}_name'] = brands.apply(lambda item: item['name'])
     frame[f'{prefix}_short'] = brands.apply(lambda item: item['short'])
     return frame
