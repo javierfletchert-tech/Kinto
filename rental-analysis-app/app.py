@@ -192,6 +192,15 @@ def _prepare_rental_dataframe(raw_df, fleet_dataframe, now_ts=None):
     prepared_df.loc[prepared_df['is_ongoing_rental'] & (prepared_df['rental_days'] > 14), 'ongoing_risk_bucket'] = '>14 days'
     prepared_df.loc[prepared_df['is_ongoing_rental'] & (prepared_df['rental_days'] > 30), 'ongoing_risk_bucket'] = '>30 days'
 
+    # Use categorical dtype for high-repetition dimensions to speed filtering/groupby.
+    category_cols = [
+        'station_name', 'vehicle_type', 'renter_name', 'start_month_name',
+        'year_month', 'rental_status', 'ongoing_risk_bucket', 'Status', 'Model', 'Colour'
+    ]
+    for category_col in category_cols:
+        if category_col in prepared_df.columns:
+            prepared_df[category_col] = prepared_df[category_col].astype('category')
+
     return prepared_df
 
 # Load rental data
@@ -246,6 +255,10 @@ inv_df['Status'] = inv_df['Status'].fillna('Unknown').astype(str)
 inv_df['year_month'] = inv_df['Date of submission'].dt.strftime('%Y-%m')
 inv_df['year_month_dt'] = pd.to_datetime(inv_df['year_month'] + '-01', errors='coerce')
 inv_df['sub_month_name'] = inv_df['Date of submission'].dt.strftime('%B')
+
+for category_col in ['Dealer Name', 'Work Category', 'Vehicle', 'sub_month_name', 'Status', 'Model']:
+    if category_col in inv_df.columns:
+        inv_df[category_col] = inv_df[category_col].astype('category')
 
 # Validation stats (used in layout options)
 inv_total_rows = len(inv_df)
@@ -364,6 +377,10 @@ def _reload_data():
     _inv_df['year_month_dt'] = pd.to_datetime(_inv_df['year_month'] + '-01', errors='coerce')
     _inv_df['sub_month_name'] = _inv_df['Date of submission'].dt.strftime('%B')
 
+    for category_col in ['Dealer Name', 'Work Category', 'Vehicle', 'sub_month_name', 'Status', 'Model']:
+        if category_col in _inv_df.columns:
+            _inv_df[category_col] = _inv_df[category_col].astype('category')
+
     # Assign to globals
     df = _df
     fleet_df = _fleet_df
@@ -382,12 +399,13 @@ def _reload_data():
 
 
 # App
-import time
-cache_bust = int(time.time() * 1000)
+assets_css_path = Path(__file__).resolve().parent / 'assets' / 'custom.css'
+cache_bust = int(assets_css_path.stat().st_mtime) if assets_css_path.exists() else 1
 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], compress=True)
 server = app.server
 app.config.suppress_callback_exceptions = True
+server.config['SEND_FILE_MAX_AGE_DEFAULT'] = int(os.getenv('STATIC_CACHE_SECONDS', '3600'))
 
 # State store for tracking previous tab selections and reset state
 app.layout_children_reference = None
