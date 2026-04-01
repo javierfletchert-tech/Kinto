@@ -249,7 +249,7 @@ inv_df = inv_df.merge(
 # Merge with fleet_df to get Model and MY (model year)
 fleet_lookup = fleet_df[['VIN', 'Model', 'MY', 'Status']].dropna(subset=['VIN']).drop_duplicates('VIN')
 inv_df = inv_df.merge(fleet_lookup, on='VIN', how='left')
-inv_df['Status'] = inv_df['Status'].fillna('Unknown').astype(str)
+inv_df['Status'] = inv_df['Status'].astype('string').fillna('Unknown').astype(str)
 
 # Add year_month for time series
 inv_df['year_month'] = inv_df['Date of submission'].dt.strftime('%Y-%m')
@@ -326,7 +326,8 @@ def _rebuild_reference_lookups():
         full_history_df.loc[full_history_df['customer_id'].isin(['', 'nan', 'None']), 'customer_id'] = pd.NA
     else:
         full_history_df['customer_id'] = pd.NA
-    full_history_df['customer_id'] = full_history_df['customer_id'].fillna('RENTER:' + full_history_df['renter_name'].fillna('Unknown').astype(str))
+    renter_fallback = full_history_df['renter_name'].astype('string').fillna('Unknown').astype(str)
+    full_history_df['customer_id'] = full_history_df['customer_id'].fillna('RENTER:' + renter_fallback)
 
     driver_first_rental_lookup = (
         full_history_df
@@ -372,7 +373,7 @@ def _reload_data():
     _inv_df = _inv_df.merge(_vehicle_lookup[['5VIN_key', 'VIN', 'vehicle_type', 'license_plate_number']], on='5VIN_key', how='left')
     _fleet_lookup = _fleet_df[['VIN', 'Model', 'MY', 'Status']].dropna(subset=['VIN']).drop_duplicates('VIN')
     _inv_df = _inv_df.merge(_fleet_lookup, on='VIN', how='left')
-    _inv_df['Status'] = _inv_df['Status'].fillna('Unknown').astype(str)
+    _inv_df['Status'] = _inv_df['Status'].astype('string').fillna('Unknown').astype(str)
     _inv_df['year_month'] = _inv_df['Date of submission'].dt.strftime('%Y-%m')
     _inv_df['year_month_dt'] = pd.to_datetime(_inv_df['year_month'] + '-01', errors='coerce')
     _inv_df['sub_month_name'] = _inv_df['Date of submission'].dt.strftime('%B')
@@ -1517,7 +1518,7 @@ def get_filtered_expense_df(dealers, categories, vehicles, model_years, exp_year
             (filt['Date of submission'].dt.date >= pd.to_datetime(exp_start).date()) &
             (filt['Date of submission'].dt.date <= pd.to_datetime(exp_end).date())
         ]
-    status_series = filt['Status'].fillna('Unknown').astype(str)
+    status_series = filt['Status'].astype('string').fillna('Unknown').astype(str)
     if exp_unit_statuses:
         filt = filt[status_series.isin(exp_unit_statuses)]
     elif fleet_statuses:
@@ -2883,7 +2884,8 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
     else:
         filtered_driver_df['customer_id'] = pd.NA
 
-    filtered_driver_df['customer_id'] = filtered_driver_df['customer_id'].fillna('RENTER:' + filtered_driver_df['renter_name'].fillna('Unknown').astype(str))
+    driver_renter_fallback = filtered_driver_df['renter_name'].astype('string').fillna('Unknown').astype(str)
+    filtered_driver_df['customer_id'] = filtered_driver_df['customer_id'].fillna('RENTER:' + driver_renter_fallback)
     filtered_driver_df = filtered_driver_df.merge(driver_first_rental_lookup, on='customer_id', how='left')
 
     if filtered_driver_df.empty:
