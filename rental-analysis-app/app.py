@@ -1761,6 +1761,13 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
             (monthly_scope_effective_end_for_filter >= selected_start)
         ]
 
+    # Keep one unified callback, but prune heavy per-tab computations by feeding
+    # empty frames when that tab is not active. This reduces CPU time on Render.
+    tab_filtered_dealer_df = filtered_df if active_tab == 'dealer' else filtered_df.iloc[0:0]
+    tab_filtered_vehicle_df = filtered_df if active_tab == 'vehicle' else filtered_df.iloc[0:0]
+    tab_filtered_rental_df = filtered_df if active_tab == 'rental' else filtered_df.iloc[0:0]
+    tab_filtered_driver_df = filtered_df if active_tab == 'driver' else filtered_df.iloc[0:0]
+
     shared_monthly_metrics_map, shared_target_month = _build_monthly_metrics_map(cumulative_filtered_df)
     shared_target_month_str = pd.Timestamp(shared_target_month).strftime('%Y-%m') if shared_target_month is not None else None
     
@@ -2350,7 +2357,7 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
         )
     
     # Dealer table
-    dealer_agg = filtered_df.groupby('station_name').agg(
+    dealer_agg = tab_filtered_dealer_df.groupby('station_name').agg(
         total_revenue=('revenue_amount', 'sum'),
         rentals=('rental_id', 'count'),
         rental_days=('rental_days', 'sum'),
@@ -2366,7 +2373,7 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
         valid = series.dropna()
         return valid.iloc[0] if not valid.empty else None
 
-    vehicle_view_df = filtered_df.copy()
+    vehicle_view_df = tab_filtered_vehicle_df.copy()
     vehicle_view_df['vehicle_key'] = vehicle_view_df['VIN'].astype(str)
     vehicle_view_df.loc[vehicle_view_df['VIN'].isna(), 'vehicle_key'] = '5VIN:' + vehicle_view_df['5VIN'].fillna('UNKNOWN').astype(str)
 
@@ -2598,7 +2605,7 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
     high_mileage_data = high_mileage_df.to_dict('records')
     
     # Rental table (includes ongoing rentals)
-    rental_table_df = filtered_df[[
+    rental_table_df = tab_filtered_rental_df[[
         'rental_id', 'rental_started_at_EST', 'rental_end_datetime_EST', 'rental_status',
         'is_ongoing_rental', 'ongoing_risk_bucket', 'renter_name', 'station_name', 'Model',
         'license_plate_number', '5VIN', 'rental_days', 'kms_traveled', 'total_to_charge'
@@ -2612,7 +2619,7 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
     rental_data = rental_table_df.to_dict('records')
 
     # Rental Details tab operational KPIs + charts
-    rental_ops_df = filtered_df.dropna(subset=['rental_started_at_EST']).copy()
+    rental_ops_df = tab_filtered_rental_df.dropna(subset=['rental_started_at_EST']).copy()
     rental_ops_df = rental_ops_df[rental_ops_df['rental_hours'].fillna(0) >= 0]
 
     if rental_ops_df.empty:
@@ -2850,7 +2857,7 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
         )
         return fig
 
-    filtered_driver_df = filtered_df.copy()
+    filtered_driver_df = tab_filtered_driver_df.copy()
 
     if 'customer_id' in filtered_driver_df.columns:
         filtered_driver_df['customer_id'] = filtered_driver_df['customer_id'].astype(str).str.strip()
