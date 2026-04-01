@@ -95,3 +95,28 @@ A sample dataset (`sample_rentals.xlsx`) is included for testing. The app curren
 - Date columns are automatically converted to datetime.
 - Filters are applied globally across all visualizations.
 - The monthly comparison requires selecting a year-month from the dropdown.
+
+## Daily Data Update (One Command)
+
+Render cannot read files directly from your local PC. To publish new daily Excel data to Render:
+
+1. Run this command from `rental-analysis-app`:
+   ```powershell
+   .\scripts\publish-data.ps1 \
+     -RentalSource "C:\path\PastRentalDetails_2026-2-26.xlsx" \
+     -FleetSource "C:\path\Kinto Fleet_3-20-26.xlsx" \
+     -InvoiceSource "C:\path\Invoices consolidated.xlsx"
+   ```
+
+2. Or if you already replaced files in the repo folder, run:
+   ```powershell
+   .\scripts\publish-data.ps1
+   ```
+
+What it does:
+- Copies source files into project data files
+- Commits only the three Excel files
+- Pushes to `main` (Render auto-deploy)
+
+Optional:
+- Add `-TriggerRenderHook` and set env var `RENDER_DEPLOY_HOOK_URL` to force a deploy hook call.
