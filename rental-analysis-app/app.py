@@ -13,6 +13,9 @@ from collections import OrderedDict
 EXPENSE_UNIT_STATUS_OPTIONS = ['Onboarded', 'Offboarded', 'Sold']
 ONGOING_ACTIVE_STATUSES = {'active', 'ongoing', 'in progress', 'in_progress'}
 ENABLE_CATEGORY_OPTIMIZATIONS = os.getenv('ENABLE_CATEGORY_OPTIMIZATIONS', '').strip().lower() in {'1', 'true', 'yes'}
+OUT_OF_SERVICE_STATUS_KEYWORDS = (
+    'maint', 'repair', 'down', 'out of service', 'shop', 'inactive', 'offboard', 'sold', 'retired'
+)
 DEALER_BRAND_MAP = {
     'destination toyota burnaby': {
         'name': 'Destination Toyota Burnaby',
@@ -87,6 +90,52 @@ def _append_dealer_branding(dataframe, dealer_column, prefix='dealer'):
     frame[f'{prefix}_name'] = brands.apply(lambda item: item['name'])
     frame[f'{prefix}_short'] = brands.apply(lambda item: item['short'])
     return frame
+
+
+def _is_available_for_rental(status_value):
+    if status_value is None or pd.isna(status_value):
+        return False
+
+    normalized = ' '.join(str(status_value).strip().lower().split())
+    if not normalized:
+        return False
+
+    return not any(keyword in normalized for keyword in OUT_OF_SERVICE_STATUS_KEYWORDS)
+
+
+def _build_fleet_availability_monthly(source_df):
+    required_cols = {'year_month_dt', 'VIN', 'Status'}
+    if source_df.empty or not required_cols.issubset(source_df.columns):
+        return pd.DataFrame(columns=['year_month_dt', 'total_fleet', 'active_fleet', 'out_of_service_units', 'fleet_availability_pct'])
+
+    fleet_monthly = source_df[['year_month_dt', 'VIN', 'Status']].copy()
+    fleet_monthly['VIN'] = fleet_monthly['VIN'].astype('string').str.strip()
+    fleet_monthly = fleet_monthly[fleet_monthly['VIN'].notna() & (fleet_monthly['VIN'] != '')]
+    fleet_monthly = fleet_monthly.dropna(subset=['year_month_dt'])
+    if fleet_monthly.empty:
+        return pd.DataFrame(columns=['year_month_dt', 'total_fleet', 'active_fleet', 'out_of_service_units', 'fleet_availability_pct'])
+
+    totals = (
+        fleet_monthly.groupby('year_month_dt', as_index=False)
+        .agg(total_fleet=('VIN', 'nunique'))
+    )
+
+    active_rows = fleet_monthly[fleet_monthly['Status'].apply(_is_available_for_rental)]
+    active = (
+        active_rows.groupby('year_month_dt', as_index=False)
+        .agg(active_fleet=('VIN', 'nunique'))
+    )
+
+    availability = totals.merge(active, on='year_month_dt', how='left')
+    availability['active_fleet'] = availability['active_fleet'].fillna(0).astype(int)
+    availability['total_fleet'] = availability['total_fleet'].fillna(0).astype(int)
+    availability['out_of_service_units'] = (availability['total_fleet'] - availability['active_fleet']).clip(lower=0)
+    availability['fleet_availability_pct'] = availability.apply(
+        lambda row: (row['active_fleet'] / row['total_fleet']) * 100 if row['total_fleet'] > 0 else 0.0,
+        axis=1,
+    )
+
+    return availability.sort_values('year_month_dt')
 
 
 def _prepare_rental_dataframe(raw_df, fleet_dataframe, now_ts=None):
@@ -573,11 +622,16 @@ app.layout = dbc.Container([
             dbc.Col(dbc.Card([dbc.CardBody([html.Div("Total Rental Days", className='kpi-label', style={'textAlign': 'center'}), html.Div(id='kpi_rental_days', className='kpi-value', style={'textAlign': 'center', 'width': '100%'})], style={'textAlign': 'center', 'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'alignItems': 'center'})], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=2, className='dashboard-kpi-col'),
             dbc.Col(dbc.Card([dbc.CardBody([html.Div("Avg Revenue/Rental", className='kpi-label', style={'textAlign': 'center'}), html.Div(id='kpi_avg_rev', className='kpi-value', style={'textAlign': 'center', 'width': '100%'})], style={'textAlign': 'center', 'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'alignItems': 'center'})], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=2, className='dashboard-kpi-col'),
             dbc.Col(dbc.Card([dbc.CardBody([html.Div(html.Span("Total KMs Traveled", id='kpi_total_kms_label'), className='kpi-label', style={'textAlign': 'center'}), html.Div(id='kpi_avg_days', className='kpi-value', style={'textAlign': 'center', 'width': '100%'})], style={'textAlign': 'center', 'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'alignItems': 'center'})], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=2, className='dashboard-kpi-col'),
-            dbc.Col(dbc.Card([dbc.CardBody([html.Div("Avg KMs Traveled", className='kpi-label', style={'textAlign': 'center'}), html.Div(id='kpi_avg_kms', className='kpi-value', style={'textAlign': 'center', 'width': '100%'})], style={'textAlign': 'center', 'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'alignItems': 'center'})], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=2, className='dashboard-kpi-col'),
+            dbc.Col(dbc.Card([dbc.CardBody([html.Div(html.Span("Fleet Availability", id='kpi_fleet_availability_label'), className='kpi-label', style={'textAlign': 'center'}), html.Div(id='kpi_avg_kms', className='kpi-value', style={'textAlign': 'center', 'width': '100%'})], style={'textAlign': 'center', 'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'alignItems': 'center'})], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=2, className='dashboard-kpi-col'),
         ], className='g-3 dashboard-kpi-row overview-kpi-row', style={'marginBottom': '20px'}),
         dbc.Tooltip(
             "Total kilometers driven across all rentals in the selected period",
             target='kpi_total_kms_label',
+            placement='top'
+        ),
+        dbc.Tooltip(
+            "Vehicles available for rental (not utilization)",
+            target='kpi_fleet_availability_label',
             placement='top'
         ),
         dbc.Row([
@@ -702,6 +756,15 @@ app.layout = dbc.Container([
             dbc.Col(dcc.Graph(id='vehicle_top10_chart'), width=12, lg=6),
             dbc.Col(dcc.Graph(id='vehicle_mileage_chart'), width=12, lg=6),
         ], className='mb-3'),
+
+        html.H5("Fleet Availability Trend (not utilization)", style={'marginTop': '6px'}),
+        dbc.Row([
+            dbc.Col(dcc.Graph(id='vehicle_availability_trend_chart'), width=12),
+        ], className='mb-2'),
+        html.Div(
+            "The gap between Total Fleet and Active Fleet represents vehicles out of service, helping identify maintenance and repair bottlenecks.",
+            style={'marginBottom': '12px', 'color': '#4b5563', 'fontSize': '0.9rem'}
+        ),
 
         html.H5("Mileage Monitoring", style={'marginTop': '6px'}),
         dbc.Row([
@@ -1625,6 +1688,7 @@ def update_comparison_month_options(stations, vehicle_types, plates, years, mont
      Output('vehicle_table', 'data'),
     Output('vehicle_top10_chart', 'figure'),
     Output('vehicle_mileage_chart', 'figure'),
+    Output('vehicle_availability_trend_chart', 'figure'),
     Output('veh_mileage_kpi_15000', 'children'),
     Output('veh_mileage_kpi_15_20', 'children'),
     Output('veh_mileage_kpi_20', 'children'),
@@ -1802,7 +1866,37 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
     total_days = filtered_df['rental_days'].sum()
     avg_rev = total_rev / total_rentals if total_rentals > 0 else 0
     total_kms = filtered_df['kms_traveled'].sum()
-    avg_kms = filtered_df['kms_traveled'].mean()
+    availability_monthly_df = _build_fleet_availability_monthly(filtered_df)
+
+    if not availability_monthly_df.empty:
+        latest_availability = availability_monthly_df.iloc[-1]
+        latest_availability_pct = float(latest_availability['fleet_availability_pct'])
+        latest_active_fleet = int(latest_availability['active_fleet'])
+        latest_total_fleet = int(latest_availability['total_fleet'])
+        latest_out_of_service = int(latest_availability['out_of_service_units'])
+
+        if len(availability_monthly_df) >= 2:
+            previous_availability_pct = float(availability_monthly_df.iloc[-2]['fleet_availability_pct'])
+            availability_delta_pp = latest_availability_pct - previous_availability_pct
+            availability_delta_text = f"Change vs previous month: {availability_delta_pp:+.1f} pp"
+            availability_delta_color = '#198754' if availability_delta_pp >= 0 else '#dc3545'
+        else:
+            availability_delta_text = 'Change vs previous month: N/A'
+            availability_delta_color = '#6b7280'
+
+        kpi_fleet_availability = html.Div([
+            html.Div(f"{latest_availability_pct:.1f}%", style={'fontSize': '2rem', 'fontWeight': '700', 'lineHeight': '1.05'}),
+            html.Div(f"Active Fleet {latest_active_fleet:,} / Total Fleet {latest_total_fleet:,}", style={'fontSize': '0.78rem', 'color': '#374151', 'marginTop': '4px'}),
+            html.Div(availability_delta_text, style={'fontSize': '0.75rem', 'fontWeight': '600', 'color': availability_delta_color, 'marginTop': '2px'}),
+            html.Div(f"Out of Service Units: {latest_out_of_service:,}", style={'fontSize': '0.75rem', 'color': '#6b7280', 'marginTop': '2px'}),
+            html.Div('Vehicles available for rental (not utilization)', style={'fontSize': '0.7rem', 'color': '#6b7280', 'marginTop': '3px'}),
+        ])
+    else:
+        kpi_fleet_availability = html.Div([
+            html.Div('N/A', style={'fontSize': '2rem', 'fontWeight': '700', 'lineHeight': '1.05'}),
+            html.Div('No fleet availability data for selected filters', style={'fontSize': '0.78rem', 'color': '#6b7280', 'marginTop': '4px'}),
+            html.Div('Vehicles available for rental (not utilization)', style={'fontSize': '0.7rem', 'color': '#6b7280', 'marginTop': '3px'}),
+        ])
     
     # Trends with complete monthly series and data labels
     trend_data_rev = build_complete_monthly_series(filtered_df, 'revenue_amount')
@@ -2523,6 +2617,58 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
             title='Top Performing Vehicles (Top 5)',
             annotations=[dict(text='No overperforming vehicles (index > 1.2) for current filters.', x=0.5, y=0.5, showarrow=False)],
             xaxis={'visible': False}, yaxis={'visible': False}
+        )
+
+    if not availability_monthly_df.empty:
+        availability_trend_fig = go.Figure()
+        availability_trend_fig.add_trace(go.Scatter(
+            x=availability_monthly_df['year_month_dt'],
+            y=availability_monthly_df['total_fleet'],
+            mode='lines+markers',
+            name='Total Fleet',
+            line=dict(color='#6b7280', width=2.5),
+            marker=dict(size=6),
+            hovertemplate='<b>%{x|%b %Y}</b><br>Total Fleet: %{y:.0f}<extra></extra>',
+        ))
+        availability_trend_fig.add_trace(go.Scatter(
+            x=availability_monthly_df['year_month_dt'],
+            y=availability_monthly_df['active_fleet'],
+            mode='lines+markers',
+            name='Active Fleet',
+            line=dict(color='#00708D', width=3),
+            marker=dict(size=6),
+            hovertemplate='<b>%{x|%b %Y}</b><br>Active Fleet: %{y:.0f}<extra></extra>',
+        ))
+
+        _apply_standard_figure_layout(
+            availability_trend_fig,
+            'Fleet Availability Trend',
+            xaxis=_monthly_time_axis(len(availability_monthly_df)),
+            yaxis=dict(title='Units', tickformat=',.0f', automargin=True),
+            height=360,
+        )
+        availability_trend_fig.update_layout(
+            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+            annotations=[dict(
+                text='Gap = Out of Service Units (maintenance / repair / downtime)',
+                x=0.01,
+                y=-0.24,
+                xref='paper',
+                yref='paper',
+                showarrow=False,
+                font=dict(size=11, color='#6b7280')
+            )],
+            margin=dict(l=10, r=10, t=45, b=70),
+        )
+    else:
+        availability_trend_fig = go.Figure()
+        availability_trend_fig.update_layout(
+            template='plotly_white',
+            title='Fleet Availability Trend',
+            annotations=[dict(text='No fleet availability data for current filters.', x=0.5, y=0.5, showarrow=False)],
+            xaxis={'visible': False},
+            yaxis={'visible': False},
+            margin=dict(l=10, r=10, t=45, b=40),
         )
 
     # High-mileage monitoring table and KPIs
@@ -3938,7 +4084,7 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
         dealer_rentals_per_driver_fig = go.Figure()
         dealer_efficiency_scatter_fig = go.Figure()
 
-    result = (f"${total_rev:,.0f}", f"{total_rentals:,.0f}", f"{total_days:,.0f}", f"${avg_rev:.2f}", f"{total_kms:,.0f}", f"{avg_kms:,.0f}",
+        result = (f"${total_rev:,.0f}", f"{total_rentals:,.0f}", f"{total_days:,.0f}", f"${avg_rev:.2f}", f"{total_kms:,.0f}", kpi_fleet_availability,
             trend_rev, trend_rentals, trend_days,
             projected_month_end_revenue, projected_month_end_rentals, projected_month_end_days,
             cum_revenue_summary, cum_rentals_summary, cum_days_summary,
@@ -3946,7 +4092,7 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
             cum_forecast_confidence, cum_forecast_explanation,
             cum_reconciliation_warning, cum_reconciliation_warning_style,
             dealer_agg.to_dict('records'), vehicle_agg.to_dict('records'),
-            top10_fig, mileage_scatter_fig,
+            top10_fig, mileage_scatter_fig, availability_trend_fig,
             f"{mileage_count_15000:,}", f"{mileage_count_15_20:,}", f"{mileage_count_20:,}", f"{highest_mileage:,}",
             selected_summary_children, selected_summary_style,
             empty_state_style, card_15000_style, card_15_20_style, card_20_style,
