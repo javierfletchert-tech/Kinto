@@ -37,8 +37,18 @@ DEALER_BRAND_MAP = {
 def _resolve_data_path(env_var_name, default_filename):
     base_dir = Path(__file__).resolve().parent
     configured = os.getenv(env_var_name)
-    path = Path(configured) if configured else base_dir / default_filename
-    return path
+    if configured:
+        return Path(configured)
+
+    default_text = str(default_filename)
+    default_path = Path(default_text)
+
+    # Windows absolute paths can look relative on Linux (e.g. C:\foo\bar).
+    # If detected, keep them as-is instead of joining with base_dir.
+    if default_path.is_absolute() or (len(default_text) > 1 and default_text[1] == ':'):
+        return default_path
+
+    return base_dir / default_path
 
 
 def _derive_fiscal_year(series):
@@ -346,7 +356,7 @@ def _prepare_rental_dataframe(raw_df, fleet_dataframe, now_ts=None):
     return prepared_df
 
 # Load rental data
-rental_file_path = _resolve_data_path('RENTAL_FILE_PATH', r'C:\Users\fletchj\VS Studio\Kinto\rental-analysis-app\PastRentalDetails_2026-2-25.xlsx')
+rental_file_path = _resolve_data_path('RENTAL_FILE_PATH', 'PastRentalDetails_2026-2-25.xlsx')
 df = pd.read_excel(rental_file_path)
 
 # Load fleet data
