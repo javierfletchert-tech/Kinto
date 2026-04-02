@@ -864,6 +864,21 @@ app.layout = dbc.Container([
             dbc.Col(dcc.Graph(id='dealer_rentals_per_driver', className='dashboard-graph'), xs=12, lg=6),
         ], className='g-3 dashboard-chart-row'),
 
+        html.H5("Charging Readiness", className='section-subtitle', style={'marginTop': '12px'}),
+        dbc.Row([
+            dbc.Col(
+                dbc.Card(
+                    dbc.CardBody([
+                        html.Div("Charging Readiness", className='kpi-label', style={'textAlign': 'center'}),
+                        html.Div(id='dealer_charging_readiness_kpi', style={'width': '100%'})
+                    ], style={'textAlign': 'center', 'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'alignItems': 'center'}),
+                    className='kpi-card dashboard-kpi-card'
+                ),
+                xs=12, lg=3, className='dashboard-kpi-col'
+            ),
+            dbc.Col(dcc.Graph(id='dealer_charging_readiness_chart', className='dashboard-graph'), xs=12, lg=9, className='dashboard-graph-col'),
+        ], className='g-3 dashboard-chart-row'),
+
         html.H5("Efficiency Overview", className='section-subtitle', style={'marginTop': '12px'}),
         dbc.Row([
             dbc.Col(dcc.Graph(id='dealer_efficiency_scatter', className='dashboard-graph'), xs=12),
@@ -1878,6 +1893,8 @@ def update_comparison_month_options(stations, vehicle_types, plates, calendar_ye
     Output('dealer_mirai_performance', 'figure'),
     Output('dealer_repeat_driver_rate', 'figure'),
     Output('dealer_rentals_per_driver', 'figure'),
+    Output('dealer_charging_readiness_kpi', 'children'),
+    Output('dealer_charging_readiness_chart', 'figure'),
     Output('dealer_efficiency_scatter', 'figure')],
     [Input('station_filter', 'value'),
      Input('vehicle_type_filter', 'value'),
@@ -2516,7 +2533,7 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
         cum_mtd_rentals = html.Span('N/A', style={'color': '#6b7280'})
         cum_mtd_days = html.Span('N/A', style={'color': '#6b7280'})
     else:
-        daily_df = cumulative_filtered_df[['rental_id', 'rental_started_at_EST', 'revenue_amount', 'rental_days']].copy()
+        daily_df = cumulative_filtered_df[['rental_id', 'rental_started_at_EST', 'revenue_amount', 'comparable_rental_days']].copy()
         daily_df['date'] = pd.to_datetime(daily_df['rental_started_at_EST']).dt.floor('D')
         daily_df = daily_df.dropna(subset=['date'])
         daily_df['month_start'] = daily_df['date'].dt.to_period('M').dt.to_timestamp()
@@ -2524,7 +2541,7 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
 
         daily_agg = daily_df.groupby(['month_start', 'date', 'day_of_month'], as_index=False).agg(
             revenue=('revenue_amount', 'sum'),
-            rental_days=('rental_days', 'sum')
+            rental_days=('comparable_rental_days', 'sum')
         ).sort_values(['month_start', 'date'])
 
         rental_first_occurrence = daily_df.dropna(subset=['rental_id']).copy()
@@ -4618,6 +4635,91 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
             xaxis=dict(showgrid=False, title=''), margin=dict(l=10, r=10, t=45, b=64)
         )
 
+        if 'fuel_percent_start' in tab_filtered_dealer_df.columns:
+            charging_df = tab_filtered_dealer_df[['station_name', 'fuel_percent_start']].copy()
+            charging_df['fuel_percent_start'] = pd.to_numeric(charging_df['fuel_percent_start'], errors='coerce')
+            charging_df = charging_df.dropna(subset=['station_name', 'fuel_percent_start'])
+            charging_df = charging_df[(charging_df['fuel_percent_start'] >= 0) & (charging_df['fuel_percent_start'] <= 100)].copy()
+        else:
+            charging_df = pd.DataFrame(columns=['station_name', 'fuel_percent_start'])
+
+        if not charging_df.empty:
+            charging_df['band'] = pd.Series('81-100%', index=charging_df.index)
+            charging_df.loc[charging_df['fuel_percent_start'] < 50, 'band'] = '<50%'
+            charging_df.loc[(charging_df['fuel_percent_start'] >= 50) & (charging_df['fuel_percent_start'] <= 80), 'band'] = '50-80%'
+
+            dealer_charging_summary = charging_df.groupby('station_name', as_index=False).agg(
+                total_rentals=('fuel_percent_start', 'size'),
+                avg_battery_pct=('fuel_percent_start', 'mean'),
+                poor_count=('fuel_percent_start', lambda values: int((values < 50).sum())),
+                acceptable_count=('fuel_percent_start', lambda values: int(((values >= 50) & (values <= 80)).sum())),
+                good_count=('fuel_percent_start', lambda values: int(((values >= 81) & (values <= 100)).sum())),
+            )
+            dealer_charging_summary['poor_pct'] = dealer_charging_summary['poor_count'] / dealer_charging_summary['total_rentals'] * 100
+            dealer_charging_summary['acceptable_pct'] = dealer_charging_summary['acceptable_count'] / dealer_charging_summary['total_rentals'] * 100
+            dealer_charging_summary['good_pct'] = dealer_charging_summary['good_count'] / dealer_charging_summary['total_rentals'] * 100
+            dealer_charging_summary = dealer_charging_summary.sort_values(['poor_pct', 'avg_battery_pct'], ascending=[False, True])
+
+            overall_avg_battery = float(charging_df['fuel_percent_start'].mean())
+            overall_poor_pct = float((charging_df['fuel_percent_start'] < 50).mean() * 100)
+            dealer_charging_readiness_kpi = html.Div([
+                html.Div(f"{overall_avg_battery:.1f}%", className='kpi-value', style={'textAlign': 'center', 'width': '100%'}),
+                html.Div('Avg Start Battery (%)', style={'fontSize': '0.82rem', 'color': '#374151', 'marginTop': '4px'}),
+                html.Div(f"{overall_poor_pct:.1f}% of rentals <50%", style={'fontSize': '0.78rem', 'color': '#6b7280', 'marginTop': '8px'}),
+            ])
+
+            dealer_charging_readiness_fig = go.Figure()
+            band_specs = [
+                ('<50%', '#dc3545', 'poor_pct'),
+                ('50-80%', '#f59e0b', 'acceptable_pct'),
+                ('81-100%', '#198754', 'good_pct'),
+            ]
+            customdata = dealer_charging_summary[['avg_battery_pct', 'poor_pct', 'acceptable_pct', 'good_pct', 'total_rentals']].to_numpy()
+            for band_label, band_color, band_col in band_specs:
+                dealer_charging_readiness_fig.add_trace(go.Bar(
+                    x=dealer_charging_summary['station_name'],
+                    y=dealer_charging_summary[band_col],
+                    name=band_label,
+                    marker_color=band_color,
+                    text=dealer_charging_summary[band_col].map(lambda value: f"{value:.0f}%" if value >= 7 else ''),
+                    textposition='inside',
+                    customdata=customdata,
+                    hovertemplate=(
+                        '<b>%{x}</b><br>'
+                        f'{band_label}: %{{y:.1f}}%<br>'
+                        'Avg battery %: %{customdata[0]:.1f}%<br>'
+                        '% <50%: %{customdata[1]:.1f}%<br>'
+                        '% 50-80%: %{customdata[2]:.1f}%<br>'
+                        '% 81-100%: %{customdata[3]:.1f}%<br>'
+                        'Total rentals: %{customdata[4]:.0f}<extra></extra>'
+                    )
+                ))
+
+            dealer_charging_readiness_fig.update_layout(
+                title='Charging Readiness by Dealer',
+                barmode='stack',
+                template='plotly_white',
+                hovermode='closest',
+                yaxis=dict(title='Share of Rentals (%)', ticksuffix='%', range=[0, 100]),
+                xaxis=dict(title='', showgrid=False),
+                legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+                margin=dict(l=10, r=10, t=45, b=64),
+            )
+        else:
+            dealer_charging_readiness_kpi = html.Div([
+                html.Div('N/A', className='kpi-value', style={'textAlign': 'center', 'width': '100%'}),
+                html.Div('No fuel_percent_start data for current filters', style={'fontSize': '0.78rem', 'color': '#6b7280', 'marginTop': '6px'}),
+            ])
+            dealer_charging_readiness_fig = go.Figure()
+            dealer_charging_readiness_fig.update_layout(
+                template='plotly_white',
+                title='Charging Readiness by Dealer',
+                annotations=[dict(text='No charging readiness data for current filters.', x=0.5, y=0.5, showarrow=False)],
+                xaxis={'visible': False},
+                yaxis={'visible': False},
+                margin=dict(l=10, r=10, t=45, b=40),
+            )
+
         # Efficiency Scatter Plot
         scatter_data = dealer_efficiency_data.copy()
         dealer_efficiency_scatter_fig = px.scatter(
@@ -4640,36 +4742,42 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
         dealer_mirai_performance_fig = go.Figure()
         dealer_repeat_driver_rate_fig = go.Figure()
         dealer_rentals_per_driver_fig = go.Figure()
+        dealer_charging_readiness_kpi = html.Div([
+            html.Div('N/A', className='kpi-value', style={'textAlign': 'center', 'width': '100%'}),
+            html.Div('Dealer tab inactive or no charging data', style={'fontSize': '0.78rem', 'color': '#6b7280', 'marginTop': '6px'}),
+        ])
+        dealer_charging_readiness_fig = go.Figure()
         dealer_efficiency_scatter_fig = go.Figure()
 
-        result = (overview_title, kpi_active_utilization, f"{total_rentals:,.0f}", f"{total_days:,.0f}", f"${avg_rev:.2f}", f"{total_kms:,.0f}", kpi_fleet_availability,
-            trend_rev, trend_rentals, trend_days,
-            projected_month_end_revenue, projected_month_end_rentals, projected_month_end_days,
-            cum_revenue_summary, cum_rentals_summary, cum_days_summary,
-            cum_revenue_fig, cum_rentals_fig, cum_days_fig,
-            cum_forecast_confidence, cum_forecast_explanation,
-            cum_mtd_rev, cum_mtd_rentals, cum_mtd_days,
-            dealer_agg.to_dict('records'), vehicle_agg.to_dict('records'),
-            top10_fig, mileage_scatter_fig, availability_trend_fig,
-            f"{mileage_count_15000:,}", f"{mileage_count_15_20:,}", f"{mileage_count_20:,}", f"{highest_mileage:,}",
-            selected_summary_children, selected_summary_style,
-            empty_state_style, card_15000_style, card_15_20_style, card_20_style,
-            high_mileage_data,
-            rental_data,
-            rental_kpi_total_days, rental_kpi_completed_days, rental_kpi_ongoing_days,
-            rental_kpi_ongoing_count, rental_kpi_avg_duration, rental_kpi_long_ongoing,
-            rental_insight, rental_status_breakdown_fig, rental_active_trend_fig, rental_completed_ongoing_fig,
-            driver_agg.to_dict('records'),
-            driver_kpi_total, driver_kpi_new, driver_kpi_new_pct, driver_kpi_avg_tenure, driver_kpi_overall_tenure, driver_kpi_inactive_pct,
-            driver_insight,
-            driver_new_over_time_fig, driver_active_vs_new_fig, driver_tenure_bucket_fig, driver_segment_fig, driver_cohort_fig, driver_gap_fig,
-            driver_top_table_data,
-            monthly_content, 
-            dealer_revenue_per_vehicle_fig, dealer_rentals_per_vehicle_fig, 
-            dealer_num_vehicles_fig, dealer_vehicle_mix_fig, 
-            dealer_mirai_performance_fig, 
-            dealer_repeat_driver_rate_fig, dealer_rentals_per_driver_fig, 
-            dealer_efficiency_scatter_fig)
+    result = (overview_title, kpi_active_utilization, f"{total_rentals:,.0f}", f"{total_days:,.0f}", f"${avg_rev:.2f}", f"{total_kms:,.0f}", kpi_fleet_availability,
+        trend_rev, trend_rentals, trend_days,
+        projected_month_end_revenue, projected_month_end_rentals, projected_month_end_days,
+        cum_revenue_summary, cum_rentals_summary, cum_days_summary,
+        cum_revenue_fig, cum_rentals_fig, cum_days_fig,
+        cum_forecast_confidence, cum_forecast_explanation,
+        cum_mtd_rev, cum_mtd_rentals, cum_mtd_days,
+        dealer_agg.to_dict('records'), vehicle_agg.to_dict('records'),
+        top10_fig, mileage_scatter_fig, availability_trend_fig,
+        f"{mileage_count_15000:,}", f"{mileage_count_15_20:,}", f"{mileage_count_20:,}", f"{highest_mileage:,}",
+        selected_summary_children, selected_summary_style,
+        empty_state_style, card_15000_style, card_15_20_style, card_20_style,
+        high_mileage_data,
+        rental_data,
+        rental_kpi_total_days, rental_kpi_completed_days, rental_kpi_ongoing_days,
+        rental_kpi_ongoing_count, rental_kpi_avg_duration, rental_kpi_long_ongoing,
+        rental_insight, rental_status_breakdown_fig, rental_active_trend_fig, rental_completed_ongoing_fig,
+        driver_agg.to_dict('records'),
+        driver_kpi_total, driver_kpi_new, driver_kpi_new_pct, driver_kpi_avg_tenure, driver_kpi_overall_tenure, driver_kpi_inactive_pct,
+        driver_insight,
+        driver_new_over_time_fig, driver_active_vs_new_fig, driver_tenure_bucket_fig, driver_segment_fig, driver_cohort_fig, driver_gap_fig,
+        driver_top_table_data,
+        monthly_content,
+        dealer_revenue_per_vehicle_fig, dealer_rentals_per_vehicle_fig,
+        dealer_num_vehicles_fig, dealer_vehicle_mix_fig,
+        dealer_mirai_performance_fig,
+        dealer_repeat_driver_rate_fig, dealer_rentals_per_driver_fig,
+        dealer_charging_readiness_kpi, dealer_charging_readiness_fig,
+        dealer_efficiency_scatter_fig)
 
     _cache_set(cache_key, result)
     return result
