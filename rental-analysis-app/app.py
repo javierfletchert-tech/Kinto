@@ -13,9 +13,6 @@ from collections import OrderedDict
 EXPENSE_UNIT_STATUS_OPTIONS = ['Onboarded', 'Offboarded', 'Sold']
 ONGOING_ACTIVE_STATUSES = {'active', 'ongoing', 'in progress', 'in_progress'}
 ENABLE_CATEGORY_OPTIMIZATIONS = os.getenv('ENABLE_CATEGORY_OPTIMIZATIONS', '').strip().lower() in {'1', 'true', 'yes'}
-OUT_OF_SERVICE_STATUS_KEYWORDS = (
-    'maint', 'repair', 'down', 'out of service', 'shop', 'inactive', 'offboard', 'sold', 'retired'
-)
 DEALER_BRAND_MAP = {
     'destination toyota burnaby': {
         'name': 'Destination Toyota Burnaby',
@@ -42,6 +39,22 @@ def _resolve_data_path(env_var_name, default_filename):
     configured = os.getenv(env_var_name)
     path = Path(configured) if configured else base_dir / default_filename
     return path
+
+
+def _derive_fiscal_year(series):
+    months = series.dt.month
+    years = series.dt.year
+    return years.where(months <= 3, years + 1)
+
+
+def _build_calendar_year_options(source_df):
+    years = sorted(source_df['calendar_year'].dropna().astype(int).unique())
+    return [{'label': str(year), 'value': int(year)} for year in years]
+
+
+def _build_fiscal_year_options(source_df):
+    years = sorted(source_df['fiscal_year'].dropna().astype(int).unique())
+    return [{'label': f"FY {year}", 'value': int(year)} for year in years]
 
 
 def _find_first_existing_column(dataframe, candidates):
@@ -92,50 +105,124 @@ def _append_dealer_branding(dataframe, dealer_column, prefix='dealer'):
     return frame
 
 
-def _is_available_for_rental(status_value):
-    if status_value is None or pd.isna(status_value):
-        return False
+def _load_fleet_availability_active_sheet(fleet_workbook_path):
+    columns = [
+        'year_month_dt',
+        'year',
+        'calendar_year',
+        'fiscal_year',
+        'month_name',
+        'total_fleet',
+        'active_fleet',
+        'out_of_service_units',
+        'fleet_availability_pct',
+    ]
 
-    normalized = ' '.join(str(status_value).strip().lower().split())
-    if not normalized:
-        return False
+    try:
+        raw = pd.read_excel(fleet_workbook_path, sheet_name='active%')
+    except Exception:
+        return pd.DataFrame(columns=columns)
 
-    return not any(keyword in normalized for keyword in OUT_OF_SERVICE_STATUS_KEYWORDS)
+    # New format: Year | Month | Active Fleet | Down Fleet | Total Fleet
+    year_col = _find_first_existing_column(raw, ['Year'])
+    month_col = _find_first_existing_column(raw, ['Month'])
+    active_col = _find_first_existing_column(raw, ['Active Fleet'])
+    total_col = _find_first_existing_column(raw, ['Total Fleet'])
+    if year_col is not None and month_col is not None and active_col is not None and total_col is not None:
+        monthly = raw[[year_col, month_col, active_col, total_col]].copy()
+        monthly = monthly.rename(columns={
+            year_col: 'year',
+            month_col: 'month_name',
+            active_col: 'active_fleet',
+            total_col: 'total_fleet',
+        })
 
+        monthly['year'] = pd.to_numeric(monthly['year'], errors='coerce')
+        monthly['month_name'] = monthly['month_name'].astype('string').str.strip()
+        monthly['active_fleet'] = pd.to_numeric(monthly['active_fleet'], errors='coerce').fillna(0)
+        monthly['total_fleet'] = pd.to_numeric(monthly['total_fleet'], errors='coerce').fillna(0)
 
-def _build_fleet_availability_monthly(source_df):
-    required_cols = {'year_month_dt', 'VIN', 'Status'}
-    if source_df.empty or not required_cols.issubset(source_df.columns):
-        return pd.DataFrame(columns=['year_month_dt', 'total_fleet', 'active_fleet', 'out_of_service_units', 'fleet_availability_pct'])
+        # Build month timestamp from Year + Month text (e.g., 2026 + March -> 2026-03-01)
+        month_year_text = monthly['month_name'].fillna('') + ' ' + monthly['year'].astype('Int64').astype(str)
+        monthly['year_month_dt'] = pd.to_datetime(month_year_text, format='%B %Y', errors='coerce')
+        missing_mask = monthly['year_month_dt'].isna()
+        if missing_mask.any():
+            monthly.loc[missing_mask, 'year_month_dt'] = pd.to_datetime(
+                month_year_text[missing_mask], format='%b %Y', errors='coerce'
+            )
+        monthly['year_month_dt'] = monthly['year_month_dt'].dt.to_period('M').dt.to_timestamp()
 
-    fleet_monthly = source_df[['year_month_dt', 'VIN', 'Status']].copy()
-    fleet_monthly['VIN'] = fleet_monthly['VIN'].astype('string').str.strip()
-    fleet_monthly = fleet_monthly[fleet_monthly['VIN'].notna() & (fleet_monthly['VIN'] != '')]
-    fleet_monthly = fleet_monthly.dropna(subset=['year_month_dt'])
-    if fleet_monthly.empty:
-        return pd.DataFrame(columns=['year_month_dt', 'total_fleet', 'active_fleet', 'out_of_service_units', 'fleet_availability_pct'])
+        monthly = monthly.dropna(subset=['year_month_dt'])
+        if monthly.empty:
+            return pd.DataFrame(columns=columns)
 
-    totals = (
-        fleet_monthly.groupby('year_month_dt', as_index=False)
-        .agg(total_fleet=('VIN', 'nunique'))
+        # Keep the latest row per month if duplicates exist
+        monthly = monthly.sort_values('year_month_dt').drop_duplicates(subset=['year_month_dt'], keep='last')
+        monthly['year'] = monthly['year_month_dt'].dt.year
+        monthly['calendar_year'] = monthly['year_month_dt'].dt.year
+        monthly['fiscal_year'] = _derive_fiscal_year(monthly['year_month_dt'])
+        monthly['month_name'] = monthly['year_month_dt'].dt.strftime('%B')
+        monthly['out_of_service_units'] = (monthly['total_fleet'] - monthly['active_fleet']).clip(lower=0)
+        monthly['fleet_availability_pct'] = monthly.apply(
+            lambda row: (row['active_fleet'] / row['total_fleet']) * 100 if row['total_fleet'] > 0 else 0.0,
+            axis=1,
+        ).clip(lower=0, upper=100)
+
+        return monthly[columns].sort_values('year_month_dt')
+
+    # Legacy format fallback: Year-Month | Fleet | #
+    date_col = _find_first_existing_column(raw, ['Year-Month', 'Year Month', 'Month', 'Date'])
+    metric_col = _find_first_existing_column(raw, ['Fleet', 'Metric', 'Type'])
+    value_col = _find_first_existing_column(raw, ['#', 'Value', 'Units', 'Count'])
+    if date_col is None or metric_col is None or value_col is None:
+        return pd.DataFrame(columns=columns)
+
+    active_base = raw[[date_col, metric_col, value_col]].copy()
+    active_base = active_base.rename(columns={date_col: 'raw_month', metric_col: 'metric', value_col: 'metric_value'})
+    active_base['snapshot_dt'] = pd.to_datetime(active_base['raw_month'], errors='coerce')
+    active_base['year_month_dt'] = active_base['snapshot_dt'].dt.to_period('M').dt.to_timestamp()
+    active_base['metric'] = active_base['metric'].astype('string').fillna('').str.strip().str.lower()
+    active_base['metric_value'] = pd.to_numeric(active_base['metric_value'], errors='coerce').fillna(0)
+    active_base = active_base.dropna(subset=['year_month_dt', 'snapshot_dt'])
+    if active_base.empty:
+        return pd.DataFrame(columns=columns)
+
+    # The sheet is snapshot-based (multiple rows per month). Use the latest snapshot
+    # within each month for each metric, then take max only when duplicated same-day rows exist.
+    monthly_metric_latest = (
+        active_base.sort_values(['year_month_dt', 'metric', 'snapshot_dt'])
+        .groupby(['year_month_dt', 'metric'], as_index=False)
+        .tail(1)
     )
 
-    active_rows = fleet_monthly[fleet_monthly['Status'].apply(_is_available_for_rental)]
-    active = (
-        active_rows.groupby('year_month_dt', as_index=False)
-        .agg(active_fleet=('VIN', 'nunique'))
+    total_by_month = (
+        monthly_metric_latest[monthly_metric_latest['metric'].str.contains('total', na=False)]
+        .groupby('year_month_dt', as_index=False)['metric_value']
+        .max()
+        .rename(columns={'metric_value': 'total_fleet'})
+    )
+    active_by_month = (
+        monthly_metric_latest[monthly_metric_latest['metric'].str.contains('active', na=False)]
+        .groupby('year_month_dt', as_index=False)['metric_value']
+        .max()
+        .rename(columns={'metric_value': 'active_fleet'})
     )
 
-    availability = totals.merge(active, on='year_month_dt', how='left')
-    availability['active_fleet'] = availability['active_fleet'].fillna(0).astype(int)
-    availability['total_fleet'] = availability['total_fleet'].fillna(0).astype(int)
+    availability = total_by_month.merge(active_by_month, on='year_month_dt', how='outer').fillna(0)
+    availability['total_fleet'] = pd.to_numeric(availability['total_fleet'], errors='coerce').fillna(0)
+    availability['active_fleet'] = pd.to_numeric(availability['active_fleet'], errors='coerce').fillna(0)
     availability['out_of_service_units'] = (availability['total_fleet'] - availability['active_fleet']).clip(lower=0)
     availability['fleet_availability_pct'] = availability.apply(
         lambda row: (row['active_fleet'] / row['total_fleet']) * 100 if row['total_fleet'] > 0 else 0.0,
         axis=1,
     )
+    availability['fleet_availability_pct'] = availability['fleet_availability_pct'].clip(lower=0, upper=100)
+    availability['year'] = availability['year_month_dt'].dt.year
+    availability['calendar_year'] = availability['year_month_dt'].dt.year
+    availability['fiscal_year'] = _derive_fiscal_year(availability['year_month_dt'])
+    availability['month_name'] = availability['year_month_dt'].dt.strftime('%B')
 
-    return availability.sort_values('year_month_dt')
+    return availability[columns].sort_values('year_month_dt')
 
 
 def _prepare_rental_dataframe(raw_df, fleet_dataframe, now_ts=None):
@@ -208,6 +295,8 @@ def _prepare_rental_dataframe(raw_df, fleet_dataframe, now_ts=None):
     prepared_df['rental_status'] = prepared_df['is_ongoing_rental'].map({True: 'Ongoing', False: 'Completed'})
 
     prepared_df['start_year'] = prepared_df['rental_started_at_EST'].dt.year
+    prepared_df['calendar_year'] = prepared_df['rental_started_at_EST'].dt.year
+    prepared_df['fiscal_year'] = _derive_fiscal_year(prepared_df['rental_started_at_EST'])
     prepared_df['start_month'] = prepared_df['rental_started_at_EST'].dt.month
     prepared_df['start_month_name'] = prepared_df['rental_started_at_EST'].dt.strftime('%B')
     prepared_df['year_month'] = prepared_df['rental_started_at_EST'].dt.strftime('%Y-%m')
@@ -257,12 +346,13 @@ def _prepare_rental_dataframe(raw_df, fleet_dataframe, now_ts=None):
     return prepared_df
 
 # Load rental data
-rental_file_path = _resolve_data_path('RENTAL_FILE_PATH', 'PastRentalDetails_2026-2-25.xlsx')
+rental_file_path = _resolve_data_path('RENTAL_FILE_PATH', r'C:\Users\fletchj\VS Studio\Kinto\rental-analysis-app\PastRentalDetails_2026-2-25.xlsx')
 df = pd.read_excel(rental_file_path)
 
 # Load fleet data
 fleet_file_path = _resolve_data_path('FLEET_FILE_PATH', 'Kinto Fleet_3-19-26.xlsx')
 fleet_df = pd.read_excel(fleet_file_path, sheet_name='data', header=0)
+fleet_availability_df = _load_fleet_availability_active_sheet(fleet_file_path)
 
 # Data cleaning and processing for rental data (includes ongoing rentals)
 df = _prepare_rental_dataframe(df, fleet_df)
@@ -329,7 +419,7 @@ fleet_status_values = sorted([str(s) for s in fleet_df['Status'].dropna().unique
 # Global lookups and lightweight in-memory cache for expensive callback outputs
 vehicle_mileage_lookup = pd.DataFrame(columns=['VIN', 'current_mileage'])
 driver_first_rental_lookup = pd.DataFrame(columns=['customer_id', 'first_rental_date'])
-UPDATE_ALL_CACHE_MAX = int(os.getenv('UPDATE_ALL_CACHE_MAX', '24'))
+UPDATE_ALL_CACHE_MAX = int(os.getenv('UPDATE_ALL_CACHE_MAX', '100'))
 _UPDATE_ALL_CACHE = OrderedDict()
 
 
@@ -397,7 +487,7 @@ _rebuild_reference_lookups()
 
 def _reload_data():
     """Re-read all source Excel files and recompute all global dataframes."""
-    global df, fleet_df, inv_df
+    global df, fleet_df, inv_df, fleet_availability_df
     global inv_total_rows, inv_matched, inv_unmatched
     global inv_sub_years, inv_sub_months, inv_date_min, inv_date_max
     global fleet_status_values
@@ -405,6 +495,7 @@ def _reload_data():
     # --- Rental + Fleet ---
     _df = pd.read_excel(rental_file_path)
     _fleet_df = pd.read_excel(fleet_file_path, sheet_name='data', header=0)
+    _fleet_availability_df = _load_fleet_availability_active_sheet(fleet_file_path)
 
     _df = _prepare_rental_dataframe(_df, _fleet_df)
 
@@ -441,6 +532,7 @@ def _reload_data():
     df = _df
     fleet_df = _fleet_df
     inv_df = _inv_df
+    fleet_availability_df = _fleet_availability_df
     inv_total_rows = len(inv_df)
     inv_matched = int(inv_df['VIN'].notna().sum())
     inv_unmatched = inv_total_rows - inv_matched
@@ -591,14 +683,23 @@ app.layout = dbc.Container([
 
         dbc.Row([
             dbc.Col([
-                html.Label("Year", style={'fontSize': '0.85rem', 'fontWeight': '600', 'marginBottom': '4px'}),
+                html.Label("Calendar Year", style={'fontSize': '0.85rem', 'fontWeight': '600', 'marginBottom': '4px'}),
                 dcc.Dropdown(
-                    id='year_filter',
-                    options=[{'label': str(y), 'value': y} for y in sorted(df['start_year'].unique())],
+                    id='calendar_year_filter',
+                    options=_build_calendar_year_options(df),
                     multi=True,
-                    placeholder="Select years"
+                    placeholder="Select calendar years"
                 )
-            ], xs=12, md=6, lg=6),
+            ], xs=12, md=6, lg=4),
+            dbc.Col([
+                html.Label("Fiscal Year", style={'fontSize': '0.85rem', 'fontWeight': '600', 'marginBottom': '4px'}),
+                dcc.Dropdown(
+                    id='fiscal_year_filter',
+                    options=_build_fiscal_year_options(df),
+                    multi=True,
+                    placeholder="Select fiscal years"
+                )
+            ], xs=12, md=6, lg=4),
             dbc.Col([
                 html.Label("Month", style={'fontSize': '0.85rem', 'fontWeight': '600', 'marginBottom': '4px'}),
                 dcc.Dropdown(
@@ -607,7 +708,7 @@ app.layout = dbc.Container([
                     multi=True,
                     placeholder="Select months"
                 )
-            ], xs=12, md=6, lg=6),
+            ], xs=12, md=12, lg=4),
         ], className='g-2 mb-1'),
     ], id='rental-filters-div', style={'margin-bottom': '12px'}),
 
@@ -617,7 +718,7 @@ app.layout = dbc.Container([
         html.Hr(),
         html.H3("Executive Snapshot (Filtered Period)", className='section-title'),
         dbc.Row([
-            dbc.Col(dbc.Card([dbc.CardBody([html.Div("Total Revenue", className='kpi-label', style={'textAlign': 'center'}), html.Div(id='kpi_revenue', className='kpi-value', style={'textAlign': 'center', 'width': '100%'})], style={'textAlign': 'center', 'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'alignItems': 'center'})], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=2, className='dashboard-kpi-col'),
+            dbc.Col(dbc.Card([dbc.CardBody([html.Div("Active Utilization", className='kpi-label', style={'textAlign': 'center'}), html.Div(id='kpi_revenue', className='kpi-value', style={'textAlign': 'center', 'width': '100%'})], style={'textAlign': 'center', 'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'alignItems': 'center'})], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=2, className='dashboard-kpi-col'),
             dbc.Col(dbc.Card([dbc.CardBody([html.Div("Total Rentals", className='kpi-label', style={'textAlign': 'center'}), html.Div(id='kpi_rentals', className='kpi-value', style={'textAlign': 'center', 'width': '100%'})], style={'textAlign': 'center', 'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'alignItems': 'center'})], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=2, className='dashboard-kpi-col'),
             dbc.Col(dbc.Card([dbc.CardBody([html.Div("Total Rental Days", className='kpi-label', style={'textAlign': 'center'}), html.Div(id='kpi_rental_days', className='kpi-value', style={'textAlign': 'center', 'width': '100%'})], style={'textAlign': 'center', 'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'alignItems': 'center'})], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=2, className='dashboard-kpi-col'),
             dbc.Col(dbc.Card([dbc.CardBody([html.Div("Avg Revenue/Rental", className='kpi-label', style={'textAlign': 'center'}), html.Div(id='kpi_avg_rev', className='kpi-value', style={'textAlign': 'center', 'width': '100%'})], style={'textAlign': 'center', 'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'alignItems': 'center'})], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=2, className='dashboard-kpi-col'),
@@ -639,21 +740,36 @@ app.layout = dbc.Container([
             dbc.Col(dcc.Graph(id='trend_rentals', className='dashboard-graph', config={'responsive': True, 'displayModeBar': False}), xs=12, xl=4, className='dashboard-graph-col'),
             dbc.Col(dcc.Graph(id='trend_rental_days', className='dashboard-graph', config={'responsive': True, 'displayModeBar': False}), xs=12, xl=4, className='dashboard-graph-col'),
         ], className='g-3 dashboard-chart-row'),
+        dbc.Row([
+            dbc.Col(dcc.Graph(id='overview_fleet_availability_chart', className='dashboard-graph', config={'responsive': True, 'displayModeBar': False}), xs=12, className='dashboard-graph-col'),
+        ], className='g-3 dashboard-chart-row'),
         html.Hr(style={'margin': '16px 0 10px 0'}),
         html.H5("Current Month Progress & Month-End Forecast", className='section-subtitle'),
         dbc.Row([
             dbc.Col(dbc.Card([dbc.CardBody([
-                html.Div("Month-End Forecast (Capacity-aware) Revenue", className='kpi-label'),
-                html.Div(id='cum_proj_rev', className='kpi-value')
-            ])], className='kpi-card dashboard-kpi-card'), xs=12, xl=4, className='dashboard-kpi-col'),
+                html.Div("Revenue (MTD)", className='kpi-label', style={'textAlign': 'center'}),
+                html.Div(id='cum_mtd_rev', className='kpi-value', style={'textAlign': 'center', 'width': '100%'})
+            ], style={'textAlign': 'center', 'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'alignItems': 'center'})], className='kpi-card dashboard-kpi-card', style={'borderLeft': '4px solid #00708D'}), xs=12, xl=2, className='dashboard-kpi-col'),
             dbc.Col(dbc.Card([dbc.CardBody([
-                html.Div("Month-End Forecast (Capacity-aware) Rentals", className='kpi-label'),
-                html.Div(id='cum_proj_rentals', className='kpi-value')
-            ])], className='kpi-card dashboard-kpi-card'), xs=12, xl=4, className='dashboard-kpi-col'),
+                html.Div("Month-End Forecast Revenue", className='kpi-label', style={'textAlign': 'center'}),
+                html.Div(id='cum_proj_rev', className='kpi-value', style={'textAlign': 'center', 'width': '100%'})
+            ], style={'textAlign': 'center', 'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'alignItems': 'center'})], className='kpi-card dashboard-kpi-card', style={'borderLeft': '4px solid #6b7280', 'borderStyle': 'dashed'}), xs=12, xl=2, className='dashboard-kpi-col'),
             dbc.Col(dbc.Card([dbc.CardBody([
-                html.Div("Month-End Forecast (Capacity-aware) Rental Days", className='kpi-label'),
-                html.Div(id='cum_proj_days', className='kpi-value')
-            ])], className='kpi-card dashboard-kpi-card'), xs=12, xl=4, className='dashboard-kpi-col'),
+                html.Div("Rentals (MTD)", className='kpi-label', style={'textAlign': 'center'}),
+                html.Div(id='cum_mtd_rentals', className='kpi-value', style={'textAlign': 'center', 'width': '100%'})
+            ], style={'textAlign': 'center', 'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'alignItems': 'center'})], className='kpi-card dashboard-kpi-card', style={'borderLeft': '4px solid #00708D'}), xs=12, xl=2, className='dashboard-kpi-col'),
+            dbc.Col(dbc.Card([dbc.CardBody([
+                html.Div("Month-End Forecast Rentals", className='kpi-label', style={'textAlign': 'center'}),
+                html.Div(id='cum_proj_rentals', className='kpi-value', style={'textAlign': 'center', 'width': '100%'})
+            ], style={'textAlign': 'center', 'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'alignItems': 'center'})], className='kpi-card dashboard-kpi-card', style={'borderLeft': '4px solid #6b7280', 'borderStyle': 'dashed'}), xs=12, xl=2, className='dashboard-kpi-col'),
+            dbc.Col(dbc.Card([dbc.CardBody([
+                html.Div("Rental Days (MTD)", className='kpi-label', style={'textAlign': 'center'}),
+                html.Div(id='cum_mtd_days', className='kpi-value', style={'textAlign': 'center', 'width': '100%'})
+            ], style={'textAlign': 'center', 'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'alignItems': 'center'})], className='kpi-card dashboard-kpi-card', style={'borderLeft': '4px solid #00708D'}), xs=12, xl=2, className='dashboard-kpi-col'),
+            dbc.Col(dbc.Card([dbc.CardBody([
+                html.Div("Month-End Forecast Rental Days", className='kpi-label', style={'textAlign': 'center'}),
+                html.Div(id='cum_proj_days', className='kpi-value', style={'textAlign': 'center', 'width': '100%'})
+            ], style={'textAlign': 'center', 'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'alignItems': 'center'})], className='kpi-card dashboard-kpi-card', style={'borderLeft': '4px solid #6b7280', 'borderStyle': 'dashed'}), xs=12, xl=2, className='dashboard-kpi-col'),
         ], className='g-3 dashboard-kpi-row'),
         html.Div(id='cum_forecast_confidence', className='cum-summary-text', style={'marginTop': '8px', 'fontWeight': '700'}),
         dbc.Row([
@@ -671,7 +787,6 @@ app.layout = dbc.Container([
             ], xs=12, xl=4, className='dashboard-graph-col'),
         ], className='g-2 mt-2 dashboard-chart-row'),
         dbc.Alert(id='cum_forecast_explanation', color='light', className='mt-2 mb-1', style={'border': '1px solid #e5e7eb'}),
-        dbc.Alert(id='cum_reconciliation_warning', color='warning', className='mt-1 mb-1', style={'display': 'none'}),
     ], style={'display': 'block'}),
     
     html.Div(id='monthly-content', children=[
@@ -757,15 +872,10 @@ app.layout = dbc.Container([
             dbc.Col(dcc.Graph(id='vehicle_mileage_chart'), width=12, lg=6),
         ], className='mb-3'),
 
-        html.H5("Fleet Availability Trend (not utilization)", style={'marginTop': '6px'}),
+        html.H5("Fleet Availability (Units)", style={'marginTop': '6px'}),
         dbc.Row([
             dbc.Col(dcc.Graph(id='vehicle_availability_trend_chart'), width=12),
         ], className='mb-2'),
-        html.Div(
-            "The gap between Total Fleet and Active Fleet represents vehicles out of service, helping identify maintenance and repair bottlenecks.",
-            style={'marginBottom': '12px', 'color': '#4b5563', 'fontSize': '0.9rem'}
-        ),
-
         html.H5("Mileage Monitoring", style={'marginTop': '6px'}),
         dbc.Row([
             dbc.Col(html.Div(
@@ -1432,7 +1542,8 @@ app.layout = dbc.Container([
      Output('license_plate_filter', 'value'),
     Output('renter_filter_rental', 'value'),
     Output('renter_filter_driver', 'value'),
-     Output('year_filter', 'value'),
+    Output('calendar_year_filter', 'value'),
+    Output('fiscal_year_filter', 'value'),
      Output('month_filter', 'value'),
      Output('fleet_status_filter', 'value'),
      Output('date_range', 'start_date'),
@@ -1459,7 +1570,7 @@ def unified_state_handler(logo_clicks, current_tab, stored_data):
     if logo_was_clicked:
         updated_store = {'previous_tab': 'overview', 'last_logo_clicks': logo_clicks}
         return (
-            None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None,
             reset_start, reset_end, 'overview', None, updated_store
         )
 
@@ -1468,7 +1579,7 @@ def unified_state_handler(logo_clicks, current_tab, stored_data):
     if current_tab == previous_tab and current_tab != 'overview':
         updated_store = {'previous_tab': 'overview', 'last_logo_clicks': logo_clicks or 0}
         return (
-            None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None,
             reset_start, reset_end, 'overview', None, updated_store
         )
 
@@ -1477,6 +1588,7 @@ def unified_state_handler(logo_clicks, current_tab, stored_data):
     return (
         no_update, no_update, no_update, no_update, no_update, no_update,
         no_update, no_update, no_update, no_update, no_update, no_update,
+        no_update,
         updated_store
     )
 
@@ -1623,7 +1735,8 @@ def update_tab_visibility(selected_tab):
     [Input('station_filter', 'value'),
      Input('vehicle_type_filter', 'value'),
      Input('license_plate_filter', 'value'),
-     Input('year_filter', 'value'),
+     Input('calendar_year_filter', 'value'),
+     Input('fiscal_year_filter', 'value'),
      Input('month_filter', 'value'),
      Input('date_range', 'start_date'),
      Input('date_range', 'end_date'),
@@ -1631,9 +1744,8 @@ def update_tab_visibility(selected_tab):
     Input('fleet_status_filter', 'value'),
     Input('data-refresh-counter', 'data')]
 )
-def update_comparison_month_options(stations, vehicle_types, plates, years, months, start_date, end_date, vins, fleet_statuses=None, _refresh=None):
-    filtered_df = df.copy()
-    
+def update_comparison_month_options(stations, vehicle_types, plates, calendar_years, fiscal_years, months, start_date, end_date, vins, fleet_statuses=None, _refresh=None):
+    filtered_df = df
     if stations:
         filtered_df = filtered_df[filtered_df['station_name'].isin(stations)]
     if vehicle_types:
@@ -1642,8 +1754,10 @@ def update_comparison_month_options(stations, vehicle_types, plates, years, mont
         filtered_df = filtered_df[filtered_df['license_plate_number'].isin(plates)]
     if vins:
         filtered_df = filtered_df[filtered_df['VIN'].isin(vins)]
-    if years:
-        filtered_df = filtered_df[filtered_df['start_year'].isin(years)]
+    if calendar_years:
+        filtered_df = filtered_df[filtered_df['calendar_year'].isin(calendar_years)]
+    if fiscal_years:
+        filtered_df = filtered_df[filtered_df['fiscal_year'].isin(fiscal_years)]
     if months:
         filtered_df = filtered_df[filtered_df['start_month_name'].isin(months)]
     if fleet_statuses:
@@ -1671,6 +1785,7 @@ def update_comparison_month_options(stations, vehicle_types, plates, years, mont
      Output('trend_revenue', 'figure'),
      Output('trend_rentals', 'figure'),
      Output('trend_rental_days', 'figure'),
+    Output('overview_fleet_availability_chart', 'figure'),
     Output('cum_proj_rev', 'children'),
     Output('cum_proj_rentals', 'children'),
     Output('cum_proj_days', 'children'),
@@ -1682,8 +1797,9 @@ def update_comparison_month_options(stations, vehicle_types, plates, years, mont
     Output('cum_days_chart', 'figure'),
     Output('cum_forecast_confidence', 'children'),
     Output('cum_forecast_explanation', 'children'),
-    Output('cum_reconciliation_warning', 'children'),
-    Output('cum_reconciliation_warning', 'style'),
+    Output('cum_mtd_rev', 'children'),
+    Output('cum_mtd_rentals', 'children'),
+    Output('cum_mtd_days', 'children'),
      Output('dealer_table', 'data'),
      Output('vehicle_table', 'data'),
     Output('vehicle_top10_chart', 'figure'),
@@ -1740,7 +1856,8 @@ def update_comparison_month_options(stations, vehicle_types, plates, years, mont
      Input('license_plate_filter', 'value'),
         Input('renter_filter_rental', 'value'),
         Input('renter_filter_driver', 'value'),
-     Input('year_filter', 'value'),
+      Input('calendar_year_filter', 'value'),
+      Input('fiscal_year_filter', 'value'),
      Input('month_filter', 'value'),
      Input('date_range', 'start_date'),
      Input('date_range', 'end_date'),
@@ -1752,14 +1869,15 @@ def update_comparison_month_options(stations, vehicle_types, plates, years, mont
     Input('veh-selected-mileage-band', 'data'),
     Input('data-refresh-counter', 'data')]
 )
-def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, years, months, start_date, end_date, comparison_month, active_tab, vins, fleet_statuses=None, selected_vehicle=None, selected_band=None, _refresh=None):
+def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, calendar_years, fiscal_years, months, start_date, end_date, comparison_month, active_tab, vins, fleet_statuses=None, selected_vehicle=None, selected_band=None, _refresh=None):
     cache_key = (
         _normalize_cache_key(stations),
         _normalize_cache_key(vehicle_types),
         _normalize_cache_key(plates),
         _normalize_cache_key(rental_renters),
         _normalize_cache_key(driver_renters),
-        _normalize_cache_key(years),
+        _normalize_cache_key(calendar_years),
+        _normalize_cache_key(fiscal_years),
         _normalize_cache_key(months),
         _normalize_cache_key(start_date),
         _normalize_cache_key(end_date),
@@ -1799,7 +1917,7 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
         latest_month = grouped['month_start'].max()
         return grouped.set_index('year_month').to_dict('index'), latest_month
 
-    filtered_df = df.copy()
+    filtered_df = df
     
     if stations:
         filtered_df = filtered_df[filtered_df['station_name'].isin(stations)]
@@ -1816,8 +1934,10 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
         active_renter_filter = driver_renters
     if active_renter_filter:
         filtered_df = filtered_df[filtered_df['renter_name'].isin(active_renter_filter)]
-    if years:
-        filtered_df = filtered_df[filtered_df['start_year'].isin(years)]
+    if calendar_years:
+        filtered_df = filtered_df[filtered_df['calendar_year'].isin(calendar_years)]
+    if fiscal_years:
+        filtered_df = filtered_df[filtered_df['fiscal_year'].isin(fiscal_years)]
 
     monthly_scope_ignore_global_month_df = filtered_df.copy()
 
@@ -1859,6 +1979,63 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
 
     shared_monthly_metrics_map, shared_target_month = _build_monthly_metrics_map(cumulative_filtered_df)
     shared_target_month_str = pd.Timestamp(shared_target_month).strftime('%Y-%m') if shared_target_month is not None else None
+
+    now_ts = pd.Timestamp.now()
+    today_ts = now_ts.normalize()
+
+    def _capacity_window_for_month(month_start_value):
+        month_start = pd.Timestamp(month_start_value).to_period('M').to_timestamp()
+        month_end_exclusive = month_start + pd.offsets.MonthBegin(1)
+
+        scope_start = month_start
+        scope_end_exclusive = month_end_exclusive
+
+        if start_date and end_date:
+            filter_start = pd.to_datetime(start_date).normalize()
+            filter_end_exclusive = pd.to_datetime(end_date).normalize() + pd.Timedelta(days=1)
+            scope_start = max(scope_start, filter_start)
+            scope_end_exclusive = min(scope_end_exclusive, filter_end_exclusive)
+
+        # MTD capacity uses elapsed calendar days in the current month.
+        if month_start.to_period('M') == today_ts.to_period('M'):
+            scope_end_exclusive = min(scope_end_exclusive, today_ts + pd.Timedelta(days=1))
+
+        return scope_start, scope_end_exclusive
+
+    def _period_hours_for_month(month_start_value):
+        scope_start, scope_end_exclusive = _capacity_window_for_month(month_start_value)
+        if scope_end_exclusive <= scope_start:
+            return 0.0
+        return float((scope_end_exclusive - scope_start).total_seconds() / 3600)
+
+    def _overlap_rental_hours(source_df, scope_start, scope_end_exclusive):
+        if source_df.empty or scope_end_exclusive <= scope_start:
+            return 0.0
+
+        effective_end = source_df['effective_rental_end_datetime'].fillna(now_ts)
+        clipped_end = effective_end.where(effective_end <= now_ts, now_ts)
+        overlap_mask = (
+            source_df['rental_started_at_EST'].notna() &
+            (source_df['rental_started_at_EST'] < scope_end_exclusive) &
+            (clipped_end > scope_start)
+        )
+        if not overlap_mask.any():
+            return 0.0
+
+        overlap_df = source_df.loc[overlap_mask, ['rental_started_at_EST']].copy()
+        overlap_df['effective_end'] = clipped_end.loc[overlap_mask]
+        overlap_df['overlap_start'] = overlap_df['rental_started_at_EST'].where(
+            overlap_df['rental_started_at_EST'] >= scope_start,
+            scope_start,
+        )
+        overlap_df['overlap_end'] = overlap_df['effective_end'].where(
+            overlap_df['effective_end'] <= scope_end_exclusive,
+            scope_end_exclusive,
+        )
+        overlap_hours = (
+            overlap_df['overlap_end'] - overlap_df['overlap_start']
+        ).dt.total_seconds().div(3600).clip(lower=0)
+        return float(overlap_hours.sum())
     
     # KPIs
     total_rev = filtered_df['revenue_amount'].sum()
@@ -1866,54 +2043,148 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
     total_days = filtered_df['rental_days'].sum()
     avg_rev = total_rev / total_rentals if total_rentals > 0 else 0
     total_kms = filtered_df['kms_traveled'].sum()
-    availability_monthly_df = _build_fleet_availability_monthly(filtered_df)
+
+    availability_monthly_df = fleet_availability_df.copy()
+    if calendar_years:
+        availability_monthly_df = availability_monthly_df[availability_monthly_df['calendar_year'].isin(calendar_years)]
+    if fiscal_years:
+        availability_monthly_df = availability_monthly_df[availability_monthly_df['fiscal_year'].isin(fiscal_years)]
+    if months:
+        availability_monthly_df = availability_monthly_df[availability_monthly_df['month_name'].isin(months)]
+    if start_date and end_date:
+        start_month = pd.to_datetime(start_date).to_period('M').to_timestamp()
+        end_month = pd.to_datetime(end_date).to_period('M').to_timestamp()
+        availability_monthly_df = availability_monthly_df[
+            (availability_monthly_df['year_month_dt'] >= start_month) &
+            (availability_monthly_df['year_month_dt'] <= end_month)
+        ]
+    availability_monthly_df = availability_monthly_df.sort_values('year_month_dt')
 
     if not availability_monthly_df.empty:
+        availability_monthly_df['fleet_availability_pct'] = pd.to_numeric(
+            availability_monthly_df['fleet_availability_pct'], errors='coerce'
+        ).fillna(0).clip(lower=0, upper=100)
+
+        avg_availability_pct = float(availability_monthly_df['fleet_availability_pct'].mean())
         latest_availability = availability_monthly_df.iloc[-1]
-        latest_availability_pct = float(latest_availability['fleet_availability_pct'])
         latest_active_fleet = int(latest_availability['active_fleet'])
         latest_total_fleet = int(latest_availability['total_fleet'])
-        latest_out_of_service = int(latest_availability['out_of_service_units'])
-
-        if len(availability_monthly_df) >= 2:
-            previous_availability_pct = float(availability_monthly_df.iloc[-2]['fleet_availability_pct'])
-            availability_delta_pp = latest_availability_pct - previous_availability_pct
-            availability_delta_text = f"Change vs previous month: {availability_delta_pp:+.1f} pp"
-            availability_delta_color = '#198754' if availability_delta_pp >= 0 else '#dc3545'
-        else:
-            availability_delta_text = 'Change vs previous month: N/A'
-            availability_delta_color = '#6b7280'
 
         kpi_fleet_availability = html.Div([
-            html.Div(f"{latest_availability_pct:.1f}%", style={'fontSize': '2rem', 'fontWeight': '700', 'lineHeight': '1.05'}),
-            html.Div(f"Active Fleet {latest_active_fleet:,} / Total Fleet {latest_total_fleet:,}", style={'fontSize': '0.78rem', 'color': '#374151', 'marginTop': '4px'}),
-            html.Div(availability_delta_text, style={'fontSize': '0.75rem', 'fontWeight': '600', 'color': availability_delta_color, 'marginTop': '2px'}),
-            html.Div(f"Out of Service Units: {latest_out_of_service:,}", style={'fontSize': '0.75rem', 'color': '#6b7280', 'marginTop': '2px'}),
-            html.Div('Vehicles available for rental (not utilization)', style={'fontSize': '0.7rem', 'color': '#6b7280', 'marginTop': '3px'}),
+            html.Div(f"{avg_availability_pct:.1f}%", style={'fontSize': '2rem', 'fontWeight': '700', 'lineHeight': '1.05'}),
+            html.Div('Average % of fleet available for rental during selected period', style={'fontSize': '0.76rem', 'color': '#374151', 'marginTop': '4px'}),
+            html.Div(f"Latest: {latest_active_fleet:,} active / {latest_total_fleet:,} total", style={'fontSize': '0.74rem', 'color': '#6b7280', 'marginTop': '2px'}),
         ])
     else:
         kpi_fleet_availability = html.Div([
             html.Div('N/A', style={'fontSize': '2rem', 'fontWeight': '700', 'lineHeight': '1.05'}),
             html.Div('No fleet availability data for selected filters', style={'fontSize': '0.78rem', 'color': '#6b7280', 'marginTop': '4px'}),
-            html.Div('Vehicles available for rental (not utilization)', style={'fontSize': '0.7rem', 'color': '#6b7280', 'marginTop': '3px'}),
         ])
     
-    # Trends with complete monthly series and data labels
-    trend_data_rev = build_complete_monthly_series(filtered_df, 'revenue_amount')
-    trend_rev = px.line(trend_data_rev, x='year_month_dt', y='revenue_amount', 
-                        title='Revenue Over Time', markers=True, color_discrete_sequence=['#00708D'])
-    trend_rev.update_traces(
-        line=dict(width=3, shape='spline'), 
-        marker=dict(size=6),
-        hovertemplate='<b>%{x|%b %Y}</b><br>Revenue: $%{y:,.2f}<extra></extra>'
+    utilization_rental_df = df
+    if stations:
+        utilization_rental_df = utilization_rental_df[utilization_rental_df['station_name'].isin(stations)]
+    if vehicle_types:
+        utilization_rental_df = utilization_rental_df[utilization_rental_df['vehicle_type'].isin(vehicle_types)]
+    if plates:
+        utilization_rental_df = utilization_rental_df[utilization_rental_df['license_plate_number'].isin(plates)]
+    if vins:
+        utilization_rental_df = utilization_rental_df[utilization_rental_df['VIN'].isin(vins)]
+    if active_renter_filter:
+        utilization_rental_df = utilization_rental_df[utilization_rental_df['renter_name'].isin(active_renter_filter)]
+    if fleet_statuses:
+        utilization_rental_df = utilization_rental_df[utilization_rental_df['Status'].isin(fleet_statuses)]
+
+    utilization_monthly_df = (
+        availability_monthly_df[['year_month_dt', 'active_fleet', 'total_fleet']].copy()
+        if not availability_monthly_df.empty else
+        pd.DataFrame(columns=['year_month_dt', 'active_fleet', 'total_fleet'])
     )
-    _apply_standard_figure_layout(
-        trend_rev,
-        'Revenue Over Time',
-        xaxis=_monthly_time_axis(len(trend_data_rev)),
-        yaxis=dict(tickformat='$,.0f', title='Revenue', automargin=True),
-        height=380,
-    )
+
+    if not utilization_monthly_df.empty and active_tab == 'overview':
+        utilization_monthly_df['period_hours'] = utilization_monthly_df['year_month_dt'].apply(_period_hours_for_month)
+        utilization_monthly_df = utilization_monthly_df[utilization_monthly_df['period_hours'] > 0].copy()
+        utilization_monthly_df['rental_hours'] = utilization_monthly_df['year_month_dt'].apply(
+            lambda month_value: _overlap_rental_hours(
+                utilization_rental_df,
+                *_capacity_window_for_month(month_value),
+            )
+        )
+        utilization_monthly_df['active_capacity_hours'] = utilization_monthly_df['active_fleet'] * utilization_monthly_df['period_hours']
+        utilization_monthly_df['total_capacity_hours'] = utilization_monthly_df['total_fleet'] * utilization_monthly_df['period_hours']
+        utilization_monthly_df['active_utilization_pct_raw'] = utilization_monthly_df.apply(
+            lambda row: (row['rental_hours'] / row['active_capacity_hours']) * 100 if row['active_capacity_hours'] > 0 else 0.0,
+            axis=1
+        )
+        utilization_monthly_df['total_utilization_pct_raw'] = utilization_monthly_df.apply(
+            lambda row: (row['rental_hours'] / row['total_capacity_hours']) * 100 if row['total_capacity_hours'] > 0 else 0.0,
+            axis=1
+        )
+        utilization_monthly_df['active_utilization_pct'] = utilization_monthly_df['active_utilization_pct_raw'].clip(lower=0, upper=100)
+        utilization_monthly_df['total_utilization_pct'] = utilization_monthly_df['total_utilization_pct_raw'].clip(lower=0, upper=100)
+
+        total_rental_hours = float(utilization_monthly_df['rental_hours'].sum())
+        total_period_hours = float(utilization_monthly_df['period_hours'].sum())
+        period_active_capacity = float(utilization_monthly_df['active_capacity_hours'].sum())
+        period_total_capacity = float(utilization_monthly_df['total_capacity_hours'].sum())
+        average_active_fleet = (period_active_capacity / total_period_hours) if total_period_hours > 0 else 0.0
+        active_utilization_period_pct_raw = (total_rental_hours / period_active_capacity * 100) if period_active_capacity > 0 else 0.0
+        total_utilization_period_pct_raw = (total_rental_hours / period_total_capacity * 100) if period_total_capacity > 0 else 0.0
+        active_utilization_issue = active_utilization_period_pct_raw > 100.0 or bool((utilization_monthly_df['active_utilization_pct_raw'] > 100.0).any())
+        active_utilization_period_pct = max(0.0, min(active_utilization_period_pct_raw, 100.0))
+        total_utilization_period_pct = max(0.0, min(total_utilization_period_pct_raw, 100.0))
+
+        kpi_active_utilization = html.Div([
+            html.Div(f"{active_utilization_period_pct:.1f}%", style={'fontSize': '2rem', 'fontWeight': '700', 'lineHeight': '1.05'}),
+            html.Div('Rental hours used vs total available hours (active fleet × period hours)', style={'fontSize': '0.76rem', 'color': '#374151', 'marginTop': '4px'}),
+            html.Div(
+                f"Avg active fleet: {average_active_fleet:.1f} | Vs total fleet utilization: {total_utilization_period_pct:.1f}%" if not active_utilization_issue else
+                f"Avg active fleet: {average_active_fleet:.1f} | Capped at 100% due to overlap above capacity",
+                style={'fontSize': '0.74rem', 'color': '#6b7280', 'marginTop': '2px'}
+            ),
+        ])
+
+        trend_rev = go.Figure()
+        trend_rev.add_trace(go.Scatter(
+            x=utilization_monthly_df['year_month_dt'],
+            y=utilization_monthly_df['active_utilization_pct'],
+            mode='lines+markers',
+            name='Active Utilization %',
+            line=dict(color='#00708D', width=3),
+            marker=dict(size=6),
+            hovertemplate='<b>%{x|%b %Y}</b><br>Active Utilization: %{y:.1f}%<extra></extra>'
+        ))
+        trend_rev.add_trace(go.Scatter(
+            x=utilization_monthly_df['year_month_dt'],
+            y=utilization_monthly_df['total_utilization_pct'],
+            mode='lines+markers',
+            name='Total Fleet Utilization %',
+            line=dict(color='#6b7280', width=2.5),
+            marker=dict(size=6),
+            hovertemplate='<b>%{x|%b %Y}</b><br>Total Fleet Utilization: %{y:.1f}%<extra></extra>'
+        ))
+        _apply_standard_figure_layout(
+            trend_rev,
+            'Active Utilization %',
+            xaxis=_monthly_time_axis(len(utilization_monthly_df)),
+            yaxis=dict(tickformat='.1f', ticksuffix='%', title='Utilization (%)', automargin=True),
+            height=380,
+        )
+        trend_rev.update_layout(legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1))
+    else:
+        kpi_active_utilization = html.Div([
+            html.Div('N/A', style={'fontSize': '2rem', 'fontWeight': '700', 'lineHeight': '1.05'}),
+            html.Div('No utilization data for selected period', style={'fontSize': '0.76rem', 'color': '#6b7280', 'marginTop': '4px'}),
+        ])
+        trend_rev = go.Figure()
+        trend_rev.update_layout(
+            template='plotly_white',
+            title='Active Utilization %',
+            annotations=[dict(text='No availability/utilization data for current filters.', x=0.5, y=0.5, showarrow=False)],
+            xaxis={'visible': False},
+            yaxis={'visible': False},
+            margin=dict(l=10, r=10, t=45, b=40),
+        )
 
     trend_data_rentals = build_complete_monthly_series(filtered_df, 'rental_id')
     trend_rentals = px.line(trend_data_rentals, x='year_month_dt', y='rental_id', 
@@ -1946,6 +2217,38 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
         yaxis=dict(tickformat='.2f', title='Days', automargin=True),
         height=380,
     )
+
+    if not availability_monthly_df.empty:
+        overview_fleet_availability_fig = go.Figure()
+        overview_fleet_availability_fig.add_trace(go.Scatter(
+            x=availability_monthly_df['year_month_dt'],
+            y=availability_monthly_df['fleet_availability_pct'],
+            mode='lines+markers',
+            name='Fleet Availability %',
+            line=dict(color='#00708D', width=3),
+            marker=dict(size=6),
+            hovertemplate='<b>%{x|%b %Y}</b><br>Fleet Availability: %{y:.1f}%<extra></extra>',
+        ))
+        _apply_standard_figure_layout(
+            overview_fleet_availability_fig,
+            'Fleet Availability Trend',
+            xaxis=_monthly_time_axis(len(availability_monthly_df)),
+            yaxis=dict(title='Fleet Availability (%)', tickformat='.1f', ticksuffix='%', automargin=True),
+            height=360,
+        )
+        overview_fleet_availability_fig.update_layout(
+            margin=dict(l=10, r=10, t=45, b=40),
+        )
+    else:
+        overview_fleet_availability_fig = go.Figure()
+        overview_fleet_availability_fig.update_layout(
+            template='plotly_white',
+            title='Fleet Availability Trend',
+            annotations=[dict(text='No active% availability data for current filters.', x=0.5, y=0.5, showarrow=False)],
+            xaxis={'visible': False},
+            yaxis={'visible': False},
+            margin=dict(l=10, r=10, t=45, b=40),
+        )
 
     # Cumulative Performance (Month-to-Date Comparison)
     def _empty_cum_figure(title, y_title):
@@ -1985,99 +2288,125 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
         prev_month = (pd.Timestamp(current_month) - pd.DateOffset(months=1)).to_period('M').to_timestamp()
         same_month_last_year = (pd.Timestamp(current_month) - pd.DateOffset(years=1)).to_period('M').to_timestamp()
 
-        comparison_months = [
-            (current_month, 'Current Month', '#00708D', 4),
-            (prev_month, 'Previous Month', '#94a3b8', 2.5),
-            (same_month_last_year, 'Same Month LY', '#cbd5e1', 2.5),
+        # Helper: gap-fill and return a full-month series for any reference month
+        def _full_month_series(month_start):
+            raw = cum_df[cum_df['month_start'] == month_start].copy()
+            if raw.empty:
+                return None
+            days_in_ref = int(pd.Timestamp(month_start).days_in_month)
+            full = pd.DataFrame({'day_of_month': list(range(1, days_in_ref + 1))})
+            merged = full.merge(raw[['day_of_month', f'cum_{metric_col}']], on='day_of_month', how='left')
+            merged[f'cum_{metric_col}'] = merged[f'cum_{metric_col}'].ffill().fillna(0)
+            return merged
+
+        # ── Reference series: full month (day 1 → end of month), lighter styles ──
+        ref_series = [
+            (prev_month, 'Previous Month', '#94a3b8', 2.0),
+            (same_month_last_year, 'Same Month LY', '#f0a500', 2.0),
         ]
-
-        for month_start, label, color, width in comparison_months:
-            month_slice = cum_df[(cum_df['month_start'] == month_start) & (cum_df['day_of_month'] <= latest_day)].copy()
-            if month_slice.empty:
+        for month_start, label, color, width in ref_series:
+            full_data = _full_month_series(month_start)
+            if full_data is None:
                 continue
-
-            if label == 'Current Month':
-                month_slice = month_slice.sort_values('day_of_month')
-                full_days = pd.DataFrame({'day_of_month': list(range(1, latest_day + 1))})
-                month_slice = full_days.merge(
-                    month_slice[['day_of_month', f'cum_{metric_col}']],
-                    on='day_of_month',
-                    how='left'
-                )
-                month_slice[f'cum_{metric_col}'] = month_slice[f'cum_{metric_col}'].ffill().fillna(0)
-
             month_name = pd.Timestamp(month_start).strftime('%b %Y')
             fig.add_trace(go.Scatter(
-                x=month_slice['day_of_month'],
-                y=month_slice[f'cum_{metric_col}'],
-                customdata=[['Actual'] for _ in range(len(month_slice))],
-                mode='lines+markers',
-                name=label,
+                x=full_data['day_of_month'],
+                y=full_data[f'cum_{metric_col}'],
+                mode='lines',
+                name=f'{label} ({month_name})',
                 line=dict(color=color, width=width),
-                marker=dict(size=6 if label == 'Current Month' else 4),
+                opacity=0.72,
                 hovertemplate=f'<b>{label} ({month_name})</b><br>Day: %{{x}}<br>Value: {value_format}<extra></extra>'
             ))
 
-        # Optional benchmark: average of last 6 months (excluding current month)
+        # ── Avg 6 Months: full month (all days present across benchmark set) ────
         prior_months = sorted([m for m in cum_df['month_start'].unique() if pd.Timestamp(m) < pd.Timestamp(current_month)])
         benchmark_months = prior_months[-6:]
         if benchmark_months:
-            benchmark_slice = cum_df[(cum_df['month_start'].isin(benchmark_months)) & (cum_df['day_of_month'] <= latest_day)]
+            benchmark_slice = cum_df[cum_df['month_start'].isin(benchmark_months)]
             if not benchmark_slice.empty:
                 benchmark_line = benchmark_slice.groupby('day_of_month', as_index=False)[f'cum_{metric_col}'].mean()
+                benchmark_line = benchmark_line.sort_values('day_of_month')
                 fig.add_trace(go.Scatter(
                     x=benchmark_line['day_of_month'],
                     y=benchmark_line[f'cum_{metric_col}'],
-                    customdata=[['Benchmark'] for _ in range(len(benchmark_line))],
                     mode='lines',
                     name='Avg 6 Months',
-                    line=dict(color='#d1d5db', width=2, dash='dot'),
+                    line=dict(color='#b0b8c9', width=2, dash='dot'),
+                    opacity=0.80,
                     hovertemplate=f'<b>Avg 6 Months</b><br>Day: %{{x}}<br>Value: {value_format}<extra></extra>'
                 ))
 
-        current_month_df = cum_df[(cum_df['month_start'] == current_month) & (cum_df['day_of_month'] <= latest_day)].copy()
+        # ── Current Month actual: solid line, day 1 → today ─────────────────────
+        current_actual_raw = cum_df[
+            (cum_df['month_start'] == current_month) & (cum_df['day_of_month'] <= latest_day)
+        ].copy()
+        current_has_data = not current_actual_raw.empty
+        if current_has_data:
+            current_actual_raw = current_actual_raw.sort_values('day_of_month')
+            full_actual_days = pd.DataFrame({'day_of_month': list(range(1, latest_day + 1))})
+            current_actual_filled = full_actual_days.merge(
+                current_actual_raw[['day_of_month', f'cum_{metric_col}']],
+                on='day_of_month',
+                how='left'
+            )
+            current_actual_filled[f'cum_{metric_col}'] = current_actual_filled[f'cum_{metric_col}'].ffill().fillna(0)
+            current_month_name = pd.Timestamp(current_month).strftime('%b %Y')
+            fig.add_trace(go.Scatter(
+                x=current_actual_filled['day_of_month'],
+                y=current_actual_filled[f'cum_{metric_col}'],
+                mode='lines+markers',
+                name=f'Current Month ({current_month_name})',
+                line=dict(color='#00708D', width=4),
+                marker=dict(size=5),
+                hovertemplate=f'<b>Current Month ({current_month_name}) — Actual</b><br>Day: %{{x}}<br>Value: {value_format}<extra></extra>'
+            ))
+
+        # ── Forecast: dashed line, today → end of month ──────────────────────────
         if (
             projection_info
             and projection_info.get('available')
-            and not current_month_df.empty
+            and current_has_data
             and projection_info.get('month_days', 0) > projection_info.get('current_day', 0)
         ):
-            current_actual = float(projection_info['current_value'])
-            current_day = int(projection_info['current_day'])
+            current_actual_val = float(projection_info['current_value'])
+            current_day_fc = int(projection_info['current_day'])
             total_days_current_month = int(projection_info['month_days'])
-            base_projection = float(projection_info['base_projection'])
             adjusted_projection = float(projection_info['adjusted_projection'])
 
             fig.add_trace(go.Scatter(
-                x=[current_day, total_days_current_month],
-                y=[current_actual, adjusted_projection],
+                x=[current_day_fc, total_days_current_month],
+                y=[current_actual_val, adjusted_projection],
                 mode='lines+markers',
-                name='Adjusted Forecast',
-                line=dict(color='#00708D', width=3.5, dash='dash'),
+                name='Forecast (month-end)',
+                line=dict(color='#00708D', width=3, dash='dash'),
                 marker=dict(size=7, symbol='diamond'),
-                hovertemplate=(
-                    f'<b>Adjusted Forecast</b><br>Day: %{{x}}<br>Value: {value_format}<extra></extra>'
-                )
+                hovertemplate=f'<b>Forecast</b><br>Day: %{{x}}<br>Value: {value_format}<extra></extra>'
             ))
 
-        prev_month_df = cum_df[cum_df['month_start'] == prev_month]
-        if not prev_month_df.empty:
-            prev_final = float(prev_month_df[f'cum_{metric_col}'].max())
-            fig.add_hline(
-                y=prev_final,
-                line_dash='dot',
-                line_color='#9ca3af',
-                annotation_text=f"Last Month Final ({pd.Timestamp(prev_month).strftime('%b %Y')})",
-                annotation_position='top left'
+            # "Forecast starts here" annotation near the transition point
+            fig.add_annotation(
+                x=current_day_fc,
+                y=current_actual_val,
+                text='Forecast starts here',
+                showarrow=True,
+                arrowhead=2,
+                arrowcolor='#6b7280',
+                arrowsize=0.9,
+                ax=36,
+                ay=-32,
+                font=dict(size=10, color='#6b7280'),
+                bgcolor='rgba(255,255,255,0.78)',
+                borderpad=3,
             )
 
-        # Today marker
+        # ── Today vertical line ───────────────────────────────────────────────────
         fig.add_vline(
             x=latest_day,
             line_dash='dash',
             line_color='rgba(55,65,81,0.45)',
             annotation_text='Today',
-            annotation_position='top'
+            annotation_position='top',
         )
 
         _apply_standard_figure_layout(
@@ -2089,12 +2418,12 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
                 tickvals=[1, 5, 10, 15, 20, 25, 30],
                 tickangle=0,
                 showgrid=False,
-                range=[1, 31],
+                range=[0.5, 31.5],
                 automargin=True,
             ),
             yaxis=dict(title=y_title, showgrid=True, gridcolor='rgba(156,163,175,0.20)', zeroline=False, automargin=True),
             height=420,
-            hovermode='x',
+            hovermode='x unified',
             show_legend=True,
             legend_y=1.08,
             bottom_margin=64,
@@ -2152,7 +2481,22 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
             html.Span(f'{score}%', style={'color': color, 'fontWeight': '700'})
         ])
 
-    if cumulative_filtered_df.empty:
+    if active_tab != 'overview':
+        projected_month_end_revenue = dash.no_update
+        projected_month_end_rentals = dash.no_update
+        projected_month_end_days = dash.no_update
+        cum_revenue_summary = dash.no_update
+        cum_rentals_summary = dash.no_update
+        cum_days_summary = dash.no_update
+        cum_revenue_fig = dash.no_update
+        cum_rentals_fig = dash.no_update
+        cum_days_fig = dash.no_update
+        cum_forecast_confidence = dash.no_update
+        cum_forecast_explanation = dash.no_update
+        cum_mtd_rev = dash.no_update
+        cum_mtd_rentals = dash.no_update
+        cum_mtd_days = dash.no_update
+    elif cumulative_filtered_df.empty:
         projected_month_end_revenue = html.Span('Projection not available', style={'color': '#6b7280'})
         projected_month_end_rentals = html.Span('Projection not available', style={'color': '#6b7280'})
         projected_month_end_days = html.Span('Projection not available', style={'color': '#6b7280'})
@@ -2164,8 +2508,9 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
         cum_days_fig = _empty_cum_figure('Rental Days (Cumulative by Month)', 'Rental Days')
         cum_forecast_confidence = _confidence_view(None)
         cum_forecast_explanation = html.Span('Forecast explanation unavailable: no records match the selected filters.', style={'color': '#6b7280'})
-        cum_reconciliation_warning = ''
-        cum_reconciliation_warning_style = {'display': 'none'}
+        cum_mtd_rev = html.Span('N/A', style={'color': '#6b7280'})
+        cum_mtd_rentals = html.Span('N/A', style={'color': '#6b7280'})
+        cum_mtd_days = html.Span('N/A', style={'color': '#6b7280'})
     else:
         daily_df = cumulative_filtered_df[['rental_id', 'rental_started_at_EST', 'revenue_amount', 'rental_days']].copy()
         daily_df['date'] = pd.to_datetime(daily_df['rental_started_at_EST']).dt.floor('D')
@@ -2230,30 +2575,17 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
         shared_current_distinct_rentals = int(shared_current_metrics.get('distinct_rental_id', 0)) if shared_current_metrics else 0
         shared_current_rows = int(shared_current_metrics.get('row_count', 0)) if shared_current_metrics else 0
 
-        def _estimate_active_units(month_df):
-            if month_df.empty or 'VIN' not in month_df.columns:
-                return None
-            vin_rows = month_df[['VIN', 'Status']].copy()
-            vin_rows = vin_rows.dropna(subset=['VIN'])
-            if vin_rows.empty:
-                return None
-            vin_rows['status_norm'] = vin_rows['Status'].fillna('').astype(str).str.strip().str.lower()
-            status_filter = vin_rows['status_norm'].str.contains('onboard|available|active|in service', regex=True)
-            filtered_vins = vin_rows.loc[status_filter, 'VIN'].astype(str).str.strip()
-            if filtered_vins.empty:
-                filtered_vins = vin_rows['VIN'].astype(str).str.strip()
-            filtered_vins = filtered_vins[filtered_vins != '']
-            if filtered_vins.empty:
-                return None
-            return int(filtered_vins.nunique())
-
-        current_month_scope_df = cumulative_filtered_df[
-            pd.to_datetime(cumulative_filtered_df['rental_started_at_EST']).dt.to_period('M').dt.to_timestamp() == current_month
-        ]
-        active_units = _estimate_active_units(current_month_scope_df)
-
         def _clip(value, lower_bound, upper_bound):
             return max(lower_bound, min(upper_bound, value))
+
+        def _weighted_average(pairs):
+            valid_pairs = [(float(value), float(weight)) for value, weight in pairs if pd.notna(value) and pd.notna(weight) and weight > 0]
+            if not valid_pairs:
+                return None
+            total_weight = sum(weight for _, weight in valid_pairs)
+            if total_weight <= 0:
+                return None
+            return sum(value * weight for value, weight in valid_pairs) / total_weight
 
         def _month_snapshot(metric_col, month_start, day_cutoff):
             rows = daily_agg[daily_agg['month_start'] == month_start].sort_values('day_of_month')
@@ -2271,6 +2603,36 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
                 'days_in_month': days_in_month,
             }
 
+        def _current_month_active_fleet(month_start):
+            if fleet_availability_df.empty:
+                return None
+            lookup_df = fleet_availability_df.sort_values('year_month_dt')
+            exact_match = lookup_df[lookup_df['year_month_dt'] == month_start]
+            if not exact_match.empty:
+                return float(exact_match.iloc[-1]['active_fleet'])
+            prior_match = lookup_df[lookup_df['year_month_dt'] <= month_start]
+            if not prior_match.empty:
+                return float(prior_match.iloc[-1]['active_fleet'])
+            return float(lookup_df.iloc[-1]['active_fleet'])
+
+        def _historical_avg_duration():
+            prior_months = sorted([m for m in daily_agg['month_start'].unique() if pd.Timestamp(m) < pd.Timestamp(current_month)])
+            recent_months = prior_months[-3:]
+            duration_pairs = []
+            for idx, month_start in enumerate(recent_months, start=1):
+                month_rows = daily_agg[daily_agg['month_start'] == month_start]
+                if month_rows.empty:
+                    continue
+                final_rentals = float(month_rows['cum_rentals'].max())
+                final_days = float(month_rows['cum_rental_days'].max())
+                if final_rentals <= 0 or final_days <= 0:
+                    continue
+                duration_pairs.append((final_days / final_rentals, idx))
+            historical_avg = _weighted_average(duration_pairs)
+            if historical_avg is None:
+                return 7.0
+            return max(7.0, historical_avg)
+
         def _build_forecast(metric_col):
             current_snapshot = _month_snapshot(metric_col, current_month, latest_day)
             if not current_snapshot:
@@ -2284,8 +2646,10 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
             prior_months = sorted([m for m in daily_agg['month_start'].unique() if pd.Timestamp(m) < pd.Timestamp(current_month)])
             recent_months = prior_months[-6:]
             completion_ratios = []
+            final_values = []
+            ordered_finals = []  # (month_start, final_val) in chronological order for MoM analysis
 
-            for month_start in recent_months:
+            for idx, month_start in enumerate(recent_months, start=1):
                 snapshot = _month_snapshot(metric_col, month_start, current_day)
                 if not snapshot:
                     continue
@@ -2296,47 +2660,124 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
                 ratio = observed_val / final_val
                 if ratio <= 0 or ratio >= 1.2:
                     continue
-                completion_ratios.append(ratio)
+                completion_ratios.append((ratio, idx))
+                final_values.append((final_val, idx))
+                ordered_finals.append((month_start, final_val))
 
+            # ── Month-over-month change distribution for stability floor ──────────
+            mom_ratios = []
+            for i in range(1, len(ordered_finals)):
+                prev_val = ordered_finals[i - 1][1]
+                curr_val = ordered_finals[i][1]
+                if prev_val > 0:
+                    mom_ratios.append(curr_val / prev_val)
+
+            DEFAULT_STABILITY_FLOOR = 0.70
+            if len(mom_ratios) >= 3:
+                mom_series = pd.Series(mom_ratios)
+                # Tighten floor if historical variation is low; loosen if volatile
+                p10 = float(mom_series.quantile(0.10))
+                dynamic_floor = _clip(p10, 0.60, 0.85)
+            else:
+                dynamic_floor = DEFAULT_STABILITY_FLOOR
+
+            # Previous month final for stability constraint
+            prev_month_ts = (pd.Timestamp(current_month) - pd.DateOffset(months=1)).to_period('M').to_timestamp()
+            prev_month_rows = daily_agg[daily_agg['month_start'] == prev_month_ts]
+            prev_month_final = float(prev_month_rows[f'cum_{metric_col}'].max()) if not prev_month_rows.empty else None
+            stability_floor_value = (prev_month_final * dynamic_floor) if prev_month_final else None
+
+            # ── Soft historical floors ────────────────────────────────────────────
+            # Same calendar month last year
+            same_month_last_year_ts = (pd.Timestamp(current_month) - pd.DateOffset(years=1)).to_period('M').to_timestamp()
+            smly_rows = daily_agg[daily_agg['month_start'] == same_month_last_year_ts]
+            same_month_last_year_final = float(smly_rows[f'cum_{metric_col}'].max()) if not smly_rows.empty else None
+
+            # Last 3 completed months average
+            last_3_months = prior_months[-3:]
+            last_3_finals_list = []
+            for ms in last_3_months:
+                rows = daily_agg[daily_agg['month_start'] == ms]
+                if not rows.empty:
+                    last_3_finals_list.append(float(rows[f'cum_{metric_col}'].max()))
+            last_3_avg = sum(last_3_finals_list) / len(last_3_finals_list) if last_3_finals_list else None
+
+            # Historical soft floor = 85 % of the lower of the two references
+            hist_floor_candidates = [v for v in [same_month_last_year_final, last_3_avg] if v is not None]
+            hist_soft_floor = min(hist_floor_candidates) * 0.85 if hist_floor_candidates else None
+
+            # ── Core projection ───────────────────────────────────────────────────
             run_rate = current_value / max(elapsed_days_effective, 1)
-            progress_ratio = current_day / max(current_month_days, 1)
-            if progress_ratio > 0.75:
-                damping_factor = 0.75
-            elif progress_ratio > 0.45:
-                damping_factor = 0.82
+            pace_projection = current_value + (run_rate * remaining_days_effective)
+
+            blended_completion_ratio = _weighted_average(completion_ratios)
+            if blended_completion_ratio is not None:
+                blended_completion_ratio = _clip(blended_completion_ratio, 0.08, 0.98)
+                pattern_projection = current_value / blended_completion_ratio
             else:
-                damping_factor = 0.90
+                pattern_projection = pace_projection
 
-            base_projection = current_value + (run_rate * remaining_days_effective)
-            adjusted_projection = current_value + (run_rate * remaining_days_effective * damping_factor)
+            recent_month_anchor = _weighted_average(final_values)
+            if recent_month_anchor is None:
+                recent_month_anchor = pace_projection
 
-            if active_units and active_units > 0 and remaining_days_effective > 0:
-                current_per_unit_daily = run_rate / active_units
-                metric_caps = {
-                    'rentals': (0.03, 1.00),
-                    'rental_days': (0.10, 4.50),
-                    'revenue': (15.0, 600.0),
-                }
-                min_cap, max_cap = metric_caps.get(metric_col, (0.01, 1000.0))
-                per_unit_daily_limit = _clip(current_per_unit_daily * 1.05, min_cap, max_cap)
-                capacity_cap = current_value + (active_units * remaining_days_effective * per_unit_daily_limit)
-            else:
-                capacity_cap = adjusted_projection
+            # Weights: 60 % pattern (primary), 15 % anchor, 25 % pace
+            weights = []
+            if blended_completion_ratio is not None:
+                weights.append((pattern_projection, 0.60))
+            if final_values:
+                weights.append((recent_month_anchor, 0.15))
+            weights.append((pace_projection, 0.25 if len(weights) == 2 else (0.40 if len(weights) == 1 else 1.0)))
 
-            adjusted_projection = min(adjusted_projection, capacity_cap)
+            base_projection = _weighted_average(weights)
+            if base_projection is None:
+                base_projection = pace_projection
+
+            adjusted_projection = base_projection
+
+            # ── Capacity: upper-bound ONLY — never used as a downward penalty ─────
+            capacity_cap = float('inf')
+            capacity_constrained = False
+            if metric_col == 'rentals':
+                active_fleet_for_cap = _current_month_active_fleet(current_month)
+                avg_duration_for_cap = _historical_avg_duration()
+                if active_fleet_for_cap and active_fleet_for_cap > 0 and remaining_days_effective > 0 and avg_duration_for_cap > 0:
+                    max_additional_rentals = (active_fleet_for_cap * remaining_days_effective) / avg_duration_for_cap
+                    capacity_cap = current_value + max_additional_rentals
+
+            # Apply capacity cap only if the forecast exceeds it (upper bound)
+            if adjusted_projection > capacity_cap:
+                capacity_constrained = True
+                adjusted_projection = capacity_cap
+
+            # ── Apply floors (prevent unrealistic drops) ──────────────────────────
+            stability_floor_applied = False
+            hist_floor_applied = False
+
+            if stability_floor_value is not None and adjusted_projection < stability_floor_value:
+                adjusted_projection = stability_floor_value
+                stability_floor_applied = True
+
+            if hist_soft_floor is not None and adjusted_projection < hist_soft_floor:
+                adjusted_projection = hist_soft_floor
+                hist_floor_applied = True
+
             adjusted_projection = max(adjusted_projection, current_value)
 
+            # ── Confidence score ──────────────────────────────────────────────────
             history_score = float(_clip(len(completion_ratios) / 6.0, 0, 1))
             coverage_score = float(_clip(current_day / max(current_month_days, 1), 0, 1))
             if len(completion_ratios) >= 2:
-                ratio_mean = float(pd.Series(completion_ratios).mean())
-                ratio_std = float(pd.Series(completion_ratios).std(ddof=0))
+                ratio_series = pd.Series([ratio for ratio, _ in completion_ratios])
+                ratio_mean = float(ratio_series.mean())
+                ratio_std = float(ratio_series.std(ddof=0))
                 variability = (ratio_std / ratio_mean) if ratio_mean > 0 else 1.0
                 stability_score = float(_clip(1 - (variability * 1.5), 0, 1))
             else:
                 stability_score = 0.45
-            if capacity_cap > 0:
-                cap_pressure = float(_clip(1 - max((adjusted_projection - capacity_cap), 0) / capacity_cap, 0, 1))
+            bounded_cap = capacity_cap if capacity_cap != float('inf') else adjusted_projection
+            if bounded_cap > 0:
+                cap_pressure = float(_clip(1 - max((adjusted_projection - bounded_cap), 0) / bounded_cap, 0, 1))
             else:
                 cap_pressure = 0.0
 
@@ -2353,11 +2794,15 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
                 'month_days': current_month_days,
                 'current_value': current_value,
                 'base_projection': float(base_projection),
-                'capacity_cap': float(capacity_cap),
-                'damping_factor': float(damping_factor),
+                'capacity_cap': float(bounded_cap),
                 'adjusted_projection': float(adjusted_projection),
                 'confidence': int(_clip(confidence_score, 0, 100)),
                 'history_months_used': len(completion_ratios),
+                'capacity_constrained': capacity_constrained,
+                'completion_ratio_used': float(blended_completion_ratio) if blended_completion_ratio is not None else None,
+                'stability_floor_applied': stability_floor_applied,
+                'hist_floor_applied': hist_floor_applied,
+                'dynamic_stability_floor_pct': round(dynamic_floor * 100, 1),
             }
 
         def _previous_month_final(metric_col):
@@ -2372,12 +2817,15 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
                 return html.Span('Projection not available', style={'color': '#6b7280'})
 
             projected_value = float(forecast_info['adjusted_projection'])
+            mtd_value = float(forecast_info['current_value'])
             value_text = f"${projected_value:,.2f}" if is_currency else f"{projected_value:,.2f}"
+            mtd_text = f"Projected from MTD: {'$' if is_currency else ''}{mtd_value:,.2f}"
             prev_final = _previous_month_final(metric_col)
             if prev_final is None or prev_final == 0:
                 return html.Div([
                     html.Div(value_text),
-                    html.Div('vs last month: N/A', style={'fontSize': '0.78rem', 'fontWeight': '600', 'color': '#6b7280', 'marginTop': '2px'})
+                    html.Div('vs last month: N/A', style={'fontSize': '0.78rem', 'fontWeight': '600', 'color': '#6b7280', 'marginTop': '2px'}),
+                    html.Div(mtd_text, style={'fontSize': '0.74rem', 'color': '#9ca3af', 'marginTop': '2px'}),
                 ], style={'lineHeight': '1.1'})
 
             delta_pct = ((projected_value - prev_final) / prev_final) * 100
@@ -2393,12 +2841,39 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
 
             return html.Div([
                 html.Div(value_text),
-                html.Div(delta_text, style={'fontSize': '0.78rem', 'fontWeight': '600', 'color': delta_color, 'marginTop': '2px'})
+                html.Div(delta_text, style={'fontSize': '0.78rem', 'fontWeight': '600', 'color': delta_color, 'marginTop': '2px'}),
+                html.Div(mtd_text, style={'fontSize': '0.74rem', 'color': '#9ca3af', 'marginTop': '2px'}),
             ], style={'lineHeight': '1.1'})
 
         forecast_revenue = _build_forecast('revenue')
         forecast_rentals = _build_forecast('rentals')
-        forecast_days = _build_forecast('rental_days')
+        base_forecast_days = _build_forecast('rental_days')
+
+        avg_rental_duration_forecast = _historical_avg_duration()
+        min_days_per_rental = 7.0
+        hard_min_days_per_rental = 5.0
+        if forecast_rentals.get('available'):
+            forecasted_rentals_value = float(forecast_rentals['adjusted_projection'])
+            rental_days_floor_preferred = forecasted_rentals_value * max(avg_rental_duration_forecast, min_days_per_rental)
+            rental_days_floor_hard = forecasted_rentals_value * hard_min_days_per_rental
+            base_days_projection_value = float(base_forecast_days['adjusted_projection']) if base_forecast_days.get('available') else 0.0
+            constrained_days_projection = max(base_days_projection_value, rental_days_floor_preferred, rental_days_floor_hard)
+            current_days_value = float(base_forecast_days['current_value']) if base_forecast_days.get('available') else shared_current_days
+            forecast_days = {
+                'available': True,
+                'current_day': int(forecast_rentals['current_day']),
+                'month_days': int(forecast_rentals['month_days']),
+                'current_value': float(current_days_value),
+                'base_projection': float(base_days_projection_value),
+                'capacity_cap': float(constrained_days_projection),
+                'adjusted_projection': float(max(constrained_days_projection, current_days_value)),
+                'confidence': int(min(forecast_rentals['confidence'], base_forecast_days['confidence'])) if base_forecast_days.get('available') else int(forecast_rentals['confidence']),
+                'history_months_used': min(forecast_rentals.get('history_months_used', 0), base_forecast_days.get('history_months_used', forecast_rentals.get('history_months_used', 0))) if base_forecast_days.get('available') else forecast_rentals.get('history_months_used', 0),
+                'constraint_applied': constrained_days_projection > base_days_projection_value + 0.01,
+                'avg_duration_assumption': float(max(avg_rental_duration_forecast, min_days_per_rental)),
+            }
+        else:
+            forecast_days = {'available': False}
 
         cumulative_current_rows = daily_agg[
             (daily_agg['month_start'] == current_month) & (daily_agg['day_of_month'] <= latest_day)
@@ -2408,6 +2883,24 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
         projected_month_end_revenue = _format_projected_kpi(forecast_revenue, 'revenue', is_currency=True)
         projected_month_end_rentals = _format_projected_kpi(forecast_rentals, 'rentals', is_currency=False)
         projected_month_end_days = _format_projected_kpi(forecast_days, 'rental_days', is_currency=False)
+
+        # MTD actuals (same scope as forecast, up to today)
+        mtd_revenue_val = float(forecast_revenue['current_value']) if forecast_revenue.get('available') else shared_current_revenue
+        mtd_rentals_val = float(forecast_rentals['current_value']) if forecast_rentals.get('available') else shared_current_rentals
+        mtd_days_val = float(forecast_days['current_value']) if forecast_days.get('available') else shared_current_days
+        current_month_label_mtd = pd.Timestamp(current_month).strftime('%b %Y')
+        cum_mtd_rev = html.Div([
+            html.Div(f"${mtd_revenue_val:,.2f}", style={'lineHeight': '1.1'}),
+            html.Div(f"{current_month_label_mtd} through Day {latest_day}", style={'fontSize': '0.76rem', 'color': '#6b7280', 'marginTop': '2px'}),
+        ])
+        cum_mtd_rentals = html.Div([
+            html.Div(f"{mtd_rentals_val:,.0f}", style={'lineHeight': '1.1'}),
+            html.Div(f"{current_month_label_mtd} through Day {latest_day}", style={'fontSize': '0.76rem', 'color': '#6b7280', 'marginTop': '2px'}),
+        ])
+        cum_mtd_days = html.Div([
+            html.Div(f"{mtd_days_val:,.2f}", style={'lineHeight': '1.1'}),
+            html.Div(f"{current_month_label_mtd} through Day {latest_day}", style={'fontSize': '0.76rem', 'color': '#6b7280', 'marginTop': '2px'}),
+        ])
 
         confidence_values = [
             metric_forecast['confidence']
@@ -2423,22 +2916,10 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
         else:
             cum_forecast_explanation = html.Div([
                 html.Div(
-                    'This forecast is based on current month run-rate (as of system today), remaining days, and capacity constraints. It applies a conservative adjustment to avoid overestimating end-of-month performance.',
+                    'This forecast is primarily driven by historical day-of-month completion patterns (last 3–6 months), blended with current pace and fleet capacity as an upper bound. A stability floor (default 70%, adjusted dynamically from MoM history) and a soft historical floor (same month last year / 3-month average) prevent unrealistic drops. Minimum rental duration of 7 days is enforced.',
                     style={'fontWeight': '600'}
-                ),
-                html.Div(
-                    f"Confidence score reflects history depth, month progress, pattern stability, and capacity pressure (current: {overall_confidence}%).",
-                    style={'marginTop': '4px'}
                 )
             ])
-
-        monthly_current_rentals_for_check = shared_current_rentals
-        if abs(monthly_current_rentals_for_check - cumulative_current_rentals) > 0.01:
-            cum_reconciliation_warning = 'Current-month metric mismatch detected between Monthly Comparison and Cumulative Performance'
-            cum_reconciliation_warning_style = {'display': 'block'}
-        else:
-            cum_reconciliation_warning = ''
-            cum_reconciliation_warning_style = {'display': 'none'}
 
         cum_revenue_summary = _build_mtd_summary(daily_agg, 'revenue', target_month=current_month, target_day=latest_day)
         cum_rentals_summary = _build_mtd_summary(daily_agg, 'rentals', target_month=current_month, target_day=latest_day)
@@ -2623,15 +3104,6 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
         availability_trend_fig = go.Figure()
         availability_trend_fig.add_trace(go.Scatter(
             x=availability_monthly_df['year_month_dt'],
-            y=availability_monthly_df['total_fleet'],
-            mode='lines+markers',
-            name='Total Fleet',
-            line=dict(color='#6b7280', width=2.5),
-            marker=dict(size=6),
-            hovertemplate='<b>%{x|%b %Y}</b><br>Total Fleet: %{y:.0f}<extra></extra>',
-        ))
-        availability_trend_fig.add_trace(go.Scatter(
-            x=availability_monthly_df['year_month_dt'],
             y=availability_monthly_df['active_fleet'],
             mode='lines+markers',
             name='Active Fleet',
@@ -2639,32 +3111,32 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
             marker=dict(size=6),
             hovertemplate='<b>%{x|%b %Y}</b><br>Active Fleet: %{y:.0f}<extra></extra>',
         ))
+        availability_trend_fig.add_trace(go.Scatter(
+            x=availability_monthly_df['year_month_dt'],
+            y=availability_monthly_df['total_fleet'],
+            mode='lines+markers',
+            name='Total Fleet',
+            line=dict(color='#6b7280', width=2.5),
+            marker=dict(size=6),
+            hovertemplate='<b>%{x|%b %Y}</b><br>Total Fleet: %{y:.0f}<extra></extra>',
+        ))
 
         _apply_standard_figure_layout(
             availability_trend_fig,
-            'Fleet Availability Trend',
+            'Fleet Availability (Units)',
             xaxis=_monthly_time_axis(len(availability_monthly_df)),
             yaxis=dict(title='Units', tickformat=',.0f', automargin=True),
             height=360,
         )
         availability_trend_fig.update_layout(
             legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
-            annotations=[dict(
-                text='Gap = Out of Service Units (maintenance / repair / downtime)',
-                x=0.01,
-                y=-0.24,
-                xref='paper',
-                yref='paper',
-                showarrow=False,
-                font=dict(size=11, color='#6b7280')
-            )],
-            margin=dict(l=10, r=10, t=45, b=70),
+            margin=dict(l=10, r=10, t=45, b=40),
         )
     else:
         availability_trend_fig = go.Figure()
         availability_trend_fig.update_layout(
             template='plotly_white',
-            title='Fleet Availability Trend',
+            title='Fleet Availability (Units)',
             annotations=[dict(text='No fleet availability data for current filters.', x=0.5, y=0.5, showarrow=False)],
             xaxis={'visible': False},
             yaxis={'visible': False},
@@ -4084,13 +4556,13 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
         dealer_rentals_per_driver_fig = go.Figure()
         dealer_efficiency_scatter_fig = go.Figure()
 
-        result = (f"${total_rev:,.0f}", f"{total_rentals:,.0f}", f"{total_days:,.0f}", f"${avg_rev:.2f}", f"{total_kms:,.0f}", kpi_fleet_availability,
-            trend_rev, trend_rentals, trend_days,
+        result = (kpi_active_utilization, f"{total_rentals:,.0f}", f"{total_days:,.0f}", f"${avg_rev:.2f}", f"{total_kms:,.0f}", kpi_fleet_availability,
+            trend_rev, trend_rentals, trend_days, overview_fleet_availability_fig,
             projected_month_end_revenue, projected_month_end_rentals, projected_month_end_days,
             cum_revenue_summary, cum_rentals_summary, cum_days_summary,
             cum_revenue_fig, cum_rentals_fig, cum_days_fig,
             cum_forecast_confidence, cum_forecast_explanation,
-            cum_reconciliation_warning, cum_reconciliation_warning_style,
+            cum_mtd_rev, cum_mtd_rentals, cum_mtd_days,
             dealer_agg.to_dict('records'), vehicle_agg.to_dict('records'),
             top10_fig, mileage_scatter_fig, availability_trend_fig,
             f"{mileage_count_15000:,}", f"{mileage_count_15_20:,}", f"{mileage_count_20:,}", f"{highest_mileage:,}",
@@ -4751,7 +5223,8 @@ def update_vehicle_invoice_drilldown(selection, dealers, categories, vehicles, m
      Output('vin_filter', 'options'),
     Output('renter_filter_rental', 'options'),
     Output('renter_filter_driver', 'options'),
-     Output('year_filter', 'options'),
+    Output('calendar_year_filter', 'options'),
+    Output('fiscal_year_filter', 'options'),
      Output('month_filter', 'options'),
     Output('fleet_status_filter', 'options'),
      Output('date_range', 'start_date', allow_duplicate=True),
@@ -4786,7 +5259,8 @@ def refresh_all_data(n_clicks, counter):
             {'label': f"{row['renter_name']} (ID: {row['customer_id']})", 'value': row['renter_name']}
             for _, row in df[['customer_id', 'renter_name']].drop_duplicates('customer_id').sort_values('renter_name').iterrows()
         ],
-        [{'label': str(y), 'value': y} for y in sorted(df['start_year'].unique())],
+        _build_calendar_year_options(df),
+        _build_fiscal_year_options(df),
         [{'label': m, 'value': m} for m in sorted(df['start_month_name'].unique(), key=lambda m: datetime.strptime(m, '%B').month)],
         [{'label': s, 'value': s} for s in fleet_status_values],
         df['rental_started_at_EST'].min().date(),

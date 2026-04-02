@@ -61,16 +61,20 @@ Copy-IfProvided -Source $InvoiceSource -Destination $invoiceTarget -Label "Invoi
 
 Set-Location $repoDir
 
-& $gitExe add -- "rental-analysis-app/PastRentalDetails_2026-2-25.xlsx" "rental-analysis-app/Kinto Fleet_3-19-26.xlsx" "rental-analysis-app/Invoices consolidated.xlsx"
+# Publica todos los cambios del proyecto (codigo + data) para que Render reciba app.py y cualquier ajuste reciente.
+& $gitExe add --all -- "rental-analysis-app"
 
 $staged = & $gitExe diff --cached --name-only
 if ([string]::IsNullOrWhiteSpace(($staged -join ""))) {
-    Write-Host "No hay cambios de data para commitear." -ForegroundColor Yellow
+    Write-Host "No hay cambios en rental-analysis-app para commitear." -ForegroundColor Yellow
     exit 0
 }
 
+Write-Host "Archivos staged:" -ForegroundColor Cyan
+$staged | ForEach-Object { Write-Host " - $_" }
+
 if ([string]::IsNullOrWhiteSpace($CommitMessage)) {
-    $CommitMessage = "Data refresh " + (Get-Date -Format "yyyy-MM-dd HH:mm")
+    $CommitMessage = "Publish rental-analysis-app " + (Get-Date -Format "yyyy-MM-dd HH:mm")
 }
 
 & $gitExe commit -m $CommitMessage
@@ -78,11 +82,13 @@ if ([string]::IsNullOrWhiteSpace($CommitMessage)) {
 
 Write-Host "Push completado en branch '$Branch'. Render deberia iniciar deploy automatico." -ForegroundColor Cyan
 
-if ($TriggerRenderHook) {
+if ($TriggerRenderHook -or -not [string]::IsNullOrWhiteSpace($RenderDeployHookUrl)) {
     if ([string]::IsNullOrWhiteSpace($RenderDeployHookUrl)) {
         throw "TriggerRenderHook activo pero falta RenderDeployHookUrl (parametro o variable RENDER_DEPLOY_HOOK_URL)."
     }
 
     $response = Invoke-WebRequest -Uri $RenderDeployHookUrl -Method Post -UseBasicParsing
-    Write-Host "Deploy hook disparado. HTTP status: $($response.StatusCode)" -ForegroundColor Cyan
+    Write-Host "Deploy hook de Render disparado. HTTP status: $($response.StatusCode)" -ForegroundColor Cyan
+} else {
+    Write-Host "No se encontro RENDER_DEPLOY_HOOK_URL. Se depende del auto-deploy por push de GitHub." -ForegroundColor Yellow
 }
