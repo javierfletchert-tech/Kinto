@@ -726,7 +726,7 @@ app.layout = dbc.Container([
     html.Div(id='overview-content', children=[
         # Executive Overview
         html.Hr(),
-        html.H3("Executive Snapshot (Filtered Period)", className='section-title'),
+        html.H3("Executive Snapshot (Filtered Period)", id='overview_title', className='section-title'),
         dbc.Row([
             dbc.Col(dbc.Card([dbc.CardBody([html.Div("Active Utilization", className='kpi-label', style={'textAlign': 'center'}), html.Div(id='kpi_revenue', className='kpi-value', style={'textAlign': 'center', 'width': '100%'})], style={'textAlign': 'center', 'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'alignItems': 'center'})], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=2, className='dashboard-kpi-col'),
             dbc.Col(dbc.Card([dbc.CardBody([html.Div("Total Rentals", className='kpi-label', style={'textAlign': 'center'}), html.Div(id='kpi_rentals', className='kpi-value', style={'textAlign': 'center', 'width': '100%'})], style={'textAlign': 'center', 'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'alignItems': 'center'})], className='kpi-card dashboard-kpi-card'), xs=12, sm=6, xl=2, className='dashboard-kpi-col'),
@@ -1786,7 +1786,8 @@ def update_comparison_month_options(stations, vehicle_types, plates, calendar_ye
 
 # Callbacks
 @app.callback(
-    [Output('kpi_revenue', 'children'),
+    [Output('overview_title', 'children'),
+     Output('kpi_revenue', 'children'),
      Output('kpi_rentals', 'children'),
      Output('kpi_rental_days', 'children'),
      Output('kpi_avg_rev', 'children'),
@@ -2047,6 +2048,22 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
         ).dt.total_seconds().div(3600).clip(lower=0)
         return float(overlap_hours.sum())
     
+    # Dynamic title for executive snapshot: show the effective period.
+    if start_date and end_date:
+        title_start = pd.to_datetime(start_date)
+        title_end = pd.to_datetime(end_date)
+    elif not filtered_df.empty:
+        title_start = pd.to_datetime(filtered_df['rental_started_at_EST']).min()
+        title_end = pd.to_datetime(filtered_df['rental_started_at_EST']).max()
+    else:
+        title_start = None
+        title_end = None
+
+    if title_start is not None and title_end is not None and pd.notna(title_start) and pd.notna(title_end):
+        overview_title = f"Executive Snapshot ({title_start.strftime('%Y %B')} → {title_end.strftime('%Y %B')})"
+    else:
+        overview_title = 'Executive Snapshot (Filtered Period)'
+
     # KPIs
     total_rev = filtered_df['revenue_amount'].sum()
     total_rentals = len(filtered_df)
@@ -4566,7 +4583,7 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
         dealer_rentals_per_driver_fig = go.Figure()
         dealer_efficiency_scatter_fig = go.Figure()
 
-        result = (kpi_active_utilization, f"{total_rentals:,.0f}", f"{total_days:,.0f}", f"${avg_rev:.2f}", f"{total_kms:,.0f}", kpi_fleet_availability,
+        result = (overview_title, kpi_active_utilization, f"{total_rentals:,.0f}", f"{total_days:,.0f}", f"${avg_rev:.2f}", f"{total_kms:,.0f}", kpi_fleet_availability,
             trend_rev, trend_rentals, trend_days, overview_fleet_availability_fig,
             projected_month_end_revenue, projected_month_end_rentals, projected_month_end_days,
             cum_revenue_summary, cum_rentals_summary, cum_days_summary,
