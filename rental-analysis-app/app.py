@@ -263,7 +263,7 @@ def _prepare_rental_dataframe(raw_df, fleet_dataframe, now_ts=None):
         ]
     prepared_df['revenue_amount'] = pd.to_numeric(prepared_df['revenue_amount'], errors='coerce').fillna(0)
 
-    for col in ['rental_started_at_EST', 'rental_end_datetime_EST']:
+    for col in ['rental_started_at_EST', 'rental_end_datetime_EST', 'scheduled_end_datetime_EST']:
         prepared_df[col] = pd.to_datetime(prepared_df[col], errors='coerce')
 
     prepared_df = prepared_df.dropna(subset=['rental_started_at_EST'])
@@ -302,6 +302,27 @@ def _prepare_rental_dataframe(raw_df, fleet_dataframe, now_ts=None):
     prepared_df['rental_hours'] = duration_hours.clip(lower=0)
     prepared_df.loc[prepared_df['effective_rental_end_datetime'].isna(), 'rental_hours'] = pd.NA
     prepared_df['rental_days'] = prepared_df['rental_hours'] / 24
+
+    prepared_df['comparable_rental_end_datetime'] = prepared_df['rental_end_datetime_EST']
+    prepared_df.loc[
+        prepared_df['comparable_rental_end_datetime'].isna() & prepared_df['is_ongoing_rental'] & prepared_df['scheduled_end_datetime_EST'].notna(),
+        'comparable_rental_end_datetime'
+    ] = prepared_df.loc[
+        prepared_df['comparable_rental_end_datetime'].isna() & prepared_df['is_ongoing_rental'] & prepared_df['scheduled_end_datetime_EST'].notna(),
+        'scheduled_end_datetime_EST'
+    ]
+    prepared_df.loc[
+        prepared_df['comparable_rental_end_datetime'].isna() & prepared_df['is_ongoing_rental'],
+        'comparable_rental_end_datetime'
+    ] = now_ts
+
+    comparable_duration_hours = (
+        prepared_df['comparable_rental_end_datetime'] - prepared_df['rental_started_at_EST']
+    ).dt.total_seconds() / 3600
+    prepared_df['comparable_rental_hours'] = comparable_duration_hours.clip(lower=0)
+    prepared_df.loc[prepared_df['comparable_rental_end_datetime'].isna(), 'comparable_rental_hours'] = pd.NA
+    prepared_df['comparable_rental_days'] = prepared_df['comparable_rental_hours'] / 24
+
     prepared_df['rental_status'] = prepared_df['is_ongoing_rental'].map({True: 'Ongoing', False: 'Completed'})
 
     prepared_df['start_year'] = prepared_df['rental_started_at_EST'].dt.year
@@ -749,9 +770,6 @@ app.layout = dbc.Container([
             dbc.Col(dcc.Graph(id='trend_revenue', className='dashboard-graph', config={'responsive': True, 'displayModeBar': False}), xs=12, xl=4, className='dashboard-graph-col'),
             dbc.Col(dcc.Graph(id='trend_rentals', className='dashboard-graph', config={'responsive': True, 'displayModeBar': False}), xs=12, xl=4, className='dashboard-graph-col'),
             dbc.Col(dcc.Graph(id='trend_rental_days', className='dashboard-graph', config={'responsive': True, 'displayModeBar': False}), xs=12, xl=4, className='dashboard-graph-col'),
-        ], className='g-3 dashboard-chart-row'),
-        dbc.Row([
-            dbc.Col(dcc.Graph(id='overview_fleet_availability_chart', className='dashboard-graph', config={'responsive': True, 'displayModeBar': False}), xs=12, className='dashboard-graph-col'),
         ], className='g-3 dashboard-chart-row'),
         html.Hr(style={'margin': '16px 0 10px 0'}),
         html.H5("Current Month Progress & Month-End Forecast", className='section-subtitle'),
@@ -1796,7 +1814,6 @@ def update_comparison_month_options(stations, vehicle_types, plates, calendar_ye
      Output('trend_revenue', 'figure'),
      Output('trend_rentals', 'figure'),
      Output('trend_rental_days', 'figure'),
-    Output('overview_fleet_availability_chart', 'figure'),
     Output('cum_proj_rev', 'children'),
     Output('cum_proj_rentals', 'children'),
     Output('cum_proj_days', 'children'),
@@ -2048,19 +2065,27 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
         ).dt.total_seconds().div(3600).clip(lower=0)
         return float(overlap_hours.sum())
     
-    # Dynamic title for executive snapshot: show the effective period.
-    if start_date and end_date:
-        title_start = pd.to_datetime(start_date)
-        title_end = pd.to_datetime(end_date)
-    elif not filtered_df.empty:
+    # Dynamic title for executive snapshot: always reflect the actual filtered scope.
+    if not filtered_df.empty:
         title_start = pd.to_datetime(filtered_df['rental_started_at_EST']).min()
         title_end = pd.to_datetime(filtered_df['rental_started_at_EST']).max()
+    elif start_date and end_date:
+        title_start = pd.to_datetime(start_date)
+        title_end = pd.to_datetime(end_date)
     else:
         title_start = None
         title_end = None
 
     if title_start is not None and title_end is not None and pd.notna(title_start) and pd.notna(title_end):
-        overview_title = f"Executive Snapshot ({title_start.strftime('%Y %B')} → {title_end.strftime('%Y %B')})"
+        overview_title = [
+            'Executive Snapshot (',
+            title_start.strftime('%Y %B'),
+            ' ',
+            html.Span('→', style={'fontWeight': '700'}),
+            ' ',
+            title_end.strftime('%Y %B'),
+            ')',
+        ]
     else:
         overview_title = 'Executive Snapshot (Filtered Period)'
 
@@ -2245,38 +2270,6 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
         height=380,
     )
 
-    if not availability_monthly_df.empty:
-        overview_fleet_availability_fig = go.Figure()
-        overview_fleet_availability_fig.add_trace(go.Scatter(
-            x=availability_monthly_df['year_month_dt'],
-            y=availability_monthly_df['fleet_availability_pct'],
-            mode='lines+markers',
-            name='Fleet Availability %',
-            line=dict(color='#00708D', width=3),
-            marker=dict(size=6),
-            hovertemplate='<b>%{x|%b %Y}</b><br>Fleet Availability: %{y:.1f}%<extra></extra>',
-        ))
-        _apply_standard_figure_layout(
-            overview_fleet_availability_fig,
-            'Fleet Availability Trend',
-            xaxis=_monthly_time_axis(len(availability_monthly_df)),
-            yaxis=dict(title='Fleet Availability (%)', tickformat='.1f', ticksuffix='%', automargin=True),
-            height=360,
-        )
-        overview_fleet_availability_fig.update_layout(
-            margin=dict(l=10, r=10, t=45, b=40),
-        )
-    else:
-        overview_fleet_availability_fig = go.Figure()
-        overview_fleet_availability_fig.update_layout(
-            template='plotly_white',
-            title='Fleet Availability Trend',
-            annotations=[dict(text='No active% availability data for current filters.', x=0.5, y=0.5, showarrow=False)],
-            xaxis={'visible': False},
-            yaxis={'visible': False},
-            margin=dict(l=10, r=10, t=45, b=40),
-        )
-
     # Cumulative Performance (Month-to-Date Comparison)
     def _empty_cum_figure(title, y_title):
         fig = go.Figure()
@@ -2410,22 +2403,6 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
                 marker=dict(size=7, symbol='diamond'),
                 hovertemplate=f'<b>Forecast</b><br>Day: %{{x}}<br>Value: {value_format}<extra></extra>'
             ))
-
-            # "Forecast starts here" annotation near the transition point
-            fig.add_annotation(
-                x=current_day_fc,
-                y=current_actual_val,
-                text='Forecast starts here',
-                showarrow=True,
-                arrowhead=2,
-                arrowcolor='#6b7280',
-                arrowsize=0.9,
-                ax=36,
-                ay=-32,
-                font=dict(size=10, color='#6b7280'),
-                bgcolor='rgba(255,255,255,0.78)',
-                borderpad=3,
-            )
 
         # ── Today vertical line ───────────────────────────────────────────────────
         fig.add_vline(
@@ -2914,7 +2891,11 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
         # MTD actuals (same scope as forecast, up to today)
         mtd_revenue_val = float(forecast_revenue['current_value']) if forecast_revenue.get('available') else shared_current_revenue
         mtd_rentals_val = float(forecast_rentals['current_value']) if forecast_rentals.get('available') else shared_current_rentals
-        mtd_days_val = float(forecast_days['current_value']) if forecast_days.get('available') else shared_current_days
+        current_month_comparable_rows = cumulative_filtered_df[
+            (pd.to_datetime(cumulative_filtered_df['rental_started_at_EST']).dt.to_period('M').dt.to_timestamp() == current_month) &
+            (pd.to_datetime(cumulative_filtered_df['rental_started_at_EST']).dt.day <= latest_day)
+        ]
+        mtd_days_val = float(current_month_comparable_rows['comparable_rental_days'].sum()) if not current_month_comparable_rows.empty else 0.0
         current_month_label_mtd = pd.Timestamp(current_month).strftime('%b %Y')
         cum_mtd_rev = html.Div([
             html.Div(f"${mtd_revenue_val:,.2f}", style={'lineHeight': '1.1'}),
@@ -4004,6 +3985,10 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
                 monthly_metrics_map_filtered, _ = _build_monthly_metrics_map(monthly_scope_for_metrics)
                 monthly_metrics_map_comparison, _ = _build_monthly_metrics_map(comparison_df)
 
+                comparison_today = pd.Timestamp.now().normalize()
+                use_same_day_mtd = current_dt.to_period('M') == comparison_today.to_period('M')
+                comparison_target_day = int(comparison_today.day)
+
                 filtered_driver_base = monthly_scope_for_metrics[['customer_id', 'rental_started_at_EST']].copy()
                 filtered_driver_base = filtered_driver_base.dropna(subset=['customer_id', 'rental_started_at_EST'])
                 filtered_driver_base['first_month'] = (
@@ -4047,12 +4032,82 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
                 )
                 comparison_new_drivers_map = dict(zip(comparison_new_drivers_monthly['year_month'], comparison_new_drivers_monthly['new_drivers']))
 
+                def _build_monthly_mtd_map(source_df, metric):
+                    if source_df.empty:
+                        return {}
+
+                    event_cols = ['rental_id', 'rental_started_at_EST', 'rental_days', 'comparable_rental_days', 'revenue_amount']
+                    if metric == 'new_drivers':
+                        event_cols.append('customer_id')
+
+                    metric_df = source_df[event_cols].copy()
+                    metric_df['event_date'] = pd.to_datetime(metric_df['rental_started_at_EST']).dt.floor('D')
+                    metric_df = metric_df.dropna(subset=['event_date'])
+                    if metric_df.empty:
+                        return {}
+
+                    metric_df['month_start'] = metric_df['event_date'].dt.to_period('M').dt.to_timestamp()
+                    metric_df['day_of_month'] = metric_df['event_date'].dt.day
+
+                    if metric == 'rentals':
+                        rental_daily = metric_df.dropna(subset=['rental_id']).copy()
+                        rental_daily = rental_daily.sort_values(['month_start', 'rental_id', 'event_date'])
+                        rental_daily = rental_daily.drop_duplicates(subset=['month_start', 'rental_id'], keep='first')
+                        daily = rental_daily.groupby(['month_start', 'day_of_month'], as_index=False).agg(metric=('rental_id', 'nunique'))
+                    elif metric == 'rental_days':
+                        daily = metric_df.groupby(['month_start', 'day_of_month'], as_index=False)['comparable_rental_days'].sum().rename(columns={'comparable_rental_days': 'metric'})
+                    elif metric == 'revenue':
+                        daily = metric_df.groupby(['month_start', 'day_of_month'], as_index=False)['revenue_amount'].sum().rename(columns={'revenue_amount': 'metric'})
+                    elif metric == 'new_drivers':
+                        if 'customer_id' not in metric_df.columns:
+                            return {}
+                        first_events = (
+                            metric_df.dropna(subset=['customer_id'])
+                            .groupby('customer_id', as_index=False)['event_date']
+                            .min()
+                        )
+                        if first_events.empty:
+                            return {}
+                        first_events['month_start'] = first_events['event_date'].dt.to_period('M').dt.to_timestamp()
+                        first_events['day_of_month'] = first_events['event_date'].dt.day
+                        daily = first_events.groupby(['month_start', 'day_of_month'], as_index=False).size().rename(columns={'size': 'metric'})
+                    else:
+                        return {}
+
+                    if daily.empty:
+                        return {}
+
+                    daily = daily.sort_values(['month_start', 'day_of_month'])
+                    daily['cum_metric'] = daily.groupby('month_start')['metric'].cumsum()
+
+                    metric_map = {}
+                    for month_start, month_slice in daily.groupby('month_start'):
+                        month_slice = month_slice.sort_values('day_of_month')
+                        day_limit = min(comparison_target_day, int(pd.Timestamp(month_start).days_in_month))
+                        eligible = month_slice[month_slice['day_of_month'] <= day_limit]
+                        year_month_key = pd.Timestamp(month_start).strftime('%Y-%m')
+                        metric_map[year_month_key] = float(eligible['cum_metric'].iloc[-1]) if not eligible.empty else 0.0
+                    return metric_map
+
+                monthly_mtd_map_filtered = {
+                    metric_name: _build_monthly_mtd_map(monthly_scope_for_metrics, metric_name)
+                    for metric_name in ['rental_days', 'revenue', 'rentals', 'new_drivers']
+                }
+                monthly_mtd_map_comparison = {
+                    metric_name: _build_monthly_mtd_map(comparison_df, metric_name)
+                    for metric_name in ['rental_days', 'revenue', 'rentals', 'new_drivers']
+                }
+
                 def get_metric(as_month, metric, use_comparison_df=False):
                     if as_month is None:
                         return None
                     search_df = comparison_df if use_comparison_df else monthly_scope_for_metrics
                     search_new_drivers_map = comparison_new_drivers_map if use_comparison_df else new_drivers_map
                     search_metrics_map = monthly_metrics_map_comparison if use_comparison_df else monthly_metrics_map_filtered
+                    search_mtd_map = monthly_mtd_map_comparison if use_comparison_df else monthly_mtd_map_filtered
+                    mtd_metric_map = search_mtd_map.get(metric, {})
+                    if use_same_day_mtd and as_month in mtd_metric_map:
+                        return float(mtd_metric_map[as_month])
                     metric_row = search_metrics_map.get(as_month)
                     if metric == 'rental_days':
                         return float(metric_row['rental_days']) if metric_row else None
@@ -4158,6 +4213,10 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
                         dbc.CardBody([
                             html.Div(metric_label, className='kpi-label'),
                             html.Div(format_value(current_val, is_currency, is_count_metric), className='kpi-value'),
+                            html.Div(
+                                f"MTD through day {comparison_target_day}" if use_same_day_mtd else "Full month total",
+                                style={'color': '#6b7280', 'fontSize': '0.78rem', 'marginTop': '4px', 'minHeight': '18px'}
+                            ),
                             html.Div(f"{mom_arrow} {mom_pct_text} vs last month", style={'color': mom_color, 'fontWeight': '600', 'fontSize': '0.92rem', 'marginTop': '8px', 'minHeight': '22px'}),
                             html.Div(f"Diff: {mom_diff_text}", style={'color': '#6b7280', 'fontSize': '0.85rem', 'minHeight': '20px'}),
                             html.Div(f"{yoy_arrow} {yoy_pct_text} vs last year", style={'color': yoy_color, 'fontWeight': '600', 'fontSize': '0.92rem', 'marginTop': '10px', 'minHeight': '22px'}),
@@ -4584,7 +4643,7 @@ def update_all(stations, vehicle_types, plates, rental_renters, driver_renters, 
         dealer_efficiency_scatter_fig = go.Figure()
 
         result = (overview_title, kpi_active_utilization, f"{total_rentals:,.0f}", f"{total_days:,.0f}", f"${avg_rev:.2f}", f"{total_kms:,.0f}", kpi_fleet_availability,
-            trend_rev, trend_rentals, trend_days, overview_fleet_availability_fig,
+            trend_rev, trend_rentals, trend_days,
             projected_month_end_revenue, projected_month_end_rentals, projected_month_end_days,
             cum_revenue_summary, cum_rentals_summary, cum_days_summary,
             cum_revenue_fig, cum_rentals_fig, cum_days_fig,
