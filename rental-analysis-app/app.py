@@ -12,6 +12,7 @@ from collections import OrderedDict
 
 EXPENSE_UNIT_STATUS_OPTIONS = ['Onboarded', 'Offboarded', 'Sold']
 ONGOING_ACTIVE_STATUSES = {'active', 'ongoing', 'in progress', 'in_progress'}
+ENABLE_CATEGORY_OPTIMIZATIONS = os.getenv('ENABLE_CATEGORY_OPTIMIZATIONS', '').strip().lower() in {'1', 'true', 'yes'}
 DEALER_BRAND_MAP = {
     'destination toyota burnaby': {
         'name': 'Destination Toyota Burnaby',
@@ -199,9 +200,10 @@ def _prepare_rental_dataframe(raw_df, fleet_dataframe, now_ts=None):
         'station_name', 'vehicle_type', 'renter_name', 'start_month_name',
         'year_month', 'rental_status', 'ongoing_risk_bucket', 'Status', 'Model', 'Colour'
     ]
-    for category_col in category_cols:
-        if category_col in prepared_df.columns:
-            prepared_df[category_col] = prepared_df[category_col].astype('category')
+    if ENABLE_CATEGORY_OPTIMIZATIONS:
+        for category_col in category_cols:
+            if category_col in prepared_df.columns:
+                prepared_df[category_col] = prepared_df[category_col].astype('category')
 
     return prepared_df
 
@@ -258,9 +260,10 @@ inv_df['year_month'] = inv_df['Date of submission'].dt.strftime('%Y-%m')
 inv_df['year_month_dt'] = pd.to_datetime(inv_df['year_month'] + '-01', errors='coerce')
 inv_df['sub_month_name'] = inv_df['Date of submission'].dt.strftime('%B')
 
-for category_col in ['Dealer Name', 'Work Category', 'Vehicle', 'sub_month_name', 'Status', 'Model']:
-    if category_col in inv_df.columns:
-        inv_df[category_col] = inv_df[category_col].astype('category')
+if ENABLE_CATEGORY_OPTIMIZATIONS:
+    for category_col in ['Dealer Name', 'Work Category', 'Vehicle', 'sub_month_name', 'Status', 'Model']:
+        if category_col in inv_df.columns:
+            inv_df[category_col] = inv_df[category_col].astype('category')
 
 # Validation stats (used in layout options)
 inv_total_rows = len(inv_df)
@@ -380,9 +383,10 @@ def _reload_data():
     _inv_df['year_month_dt'] = pd.to_datetime(_inv_df['year_month'] + '-01', errors='coerce')
     _inv_df['sub_month_name'] = _inv_df['Date of submission'].dt.strftime('%B')
 
-    for category_col in ['Dealer Name', 'Work Category', 'Vehicle', 'sub_month_name', 'Status', 'Model']:
-        if category_col in _inv_df.columns:
-            _inv_df[category_col] = _inv_df[category_col].astype('category')
+    if ENABLE_CATEGORY_OPTIMIZATIONS:
+        for category_col in ['Dealer Name', 'Work Category', 'Vehicle', 'sub_month_name', 'Status', 'Model']:
+            if category_col in _inv_df.columns:
+                _inv_df[category_col] = _inv_df[category_col].astype('category')
 
     # Assign to globals
     df = _df
